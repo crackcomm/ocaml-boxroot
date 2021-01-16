@@ -2,6 +2,7 @@ module Config = struct
   let choices = [
     "ocaml", `OCaml;
     "gc", `Gc;
+    "global-roots", `Global_roots;
   ]
 
   let wrong_usage () =
@@ -48,6 +49,7 @@ let choice_module : (module LinChoice) =
   match Config.choice with
   | `OCaml -> (module Choice_ocaml)
   | `Gc -> (module Choice_gc)
+  | `Global_roots -> (module Choice_global_roots)
 
 module Choice = (val choice_module : LinChoice)
 
