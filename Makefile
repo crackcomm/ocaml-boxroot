@@ -1,6 +1,7 @@
 CHOICE_MODULES = \
   choice_ocaml.cmx \
   choice_gc_stubs.o choice_gc.cmx \
+  abstract_value.o \
   choice_global_roots_stubs.o choice_global_roots.cmx
 
 perm_count: $(CHOICE_MODULES) perm_count.ml
@@ -10,8 +11,7 @@ perm_count: $(CHOICE_MODULES) perm_count.ml
 %.cmx: %.ml
 	ocamlopt -g -c $<
 
-
-%.o: %.c
+%.o: %.c *.h
 	ocamlopt -g -c $<
 
 clean:
