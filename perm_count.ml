@@ -3,6 +3,7 @@ module Config = struct
     "ocaml", `OCaml;
     "gc", `Gc;
     "global-roots", `Global_roots;
+    "generational-global-roots", `Generational_global_roots;
   ]
 
   let wrong_usage () =
@@ -50,6 +51,7 @@ let choice_module : (module LinChoice) =
   | `OCaml -> (module Choice_ocaml)
   | `Gc -> (module Choice_gc)
   | `Global_roots -> (module Choice_global_roots)
+  | `Generational_global_roots -> (module Choice_generational_global_roots)
 
 module Choice = (val choice_module : LinChoice)
 
