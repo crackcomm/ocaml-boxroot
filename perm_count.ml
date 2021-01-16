@@ -1,6 +1,7 @@
 module Config = struct
   let choices = [
     "ocaml", `OCaml;
+    "gc", `Gc;
   ]
 
   let wrong_usage () =
@@ -46,6 +47,7 @@ end
 let choice_module : (module LinChoice) =
   match Config.choice with
   | `OCaml -> (module Choice_ocaml)
+  | `Gc -> (module Choice_gc)
 
 module Choice = (val choice_module : LinChoice)
 
