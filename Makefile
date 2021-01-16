@@ -17,3 +17,13 @@ perm_count: $(CHOICE_MODULES) perm_count.ml
 
 clean:
 	rm -f *.cm* *.o
+
+.PHONY: bench
+bench: perm_count
+	time ./perm_count ocaml 10
+	@echo
+	time ./perm_count gc 10
+	@echo
+	time ./perm_count global-roots 10
+	@echo
+	time ./perm_count generational-global-roots 10
