@@ -22,7 +22,9 @@ clean:
 
 .PHONY: bench
 bench: perm_count
-	time ./perm_count ocaml 10
+	time ./perm_count ocaml-persistent 10
+	@echo
+	time ./perm_count ocaml-ephemeral 10
 	@echo
 	time ./perm_count gc 10
 	@echo
