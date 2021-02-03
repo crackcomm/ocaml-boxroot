@@ -1,5 +1,6 @@
 CHOICE_MODULES = \
-  choice_ocaml.cmx \
+  choice_ocaml_persistent.cmx \
+  choice_ocaml_ephemeral.cmx \
   choice_gc_stubs.o choice_gc.cmx \
   abstract_value.o \
   choice_global_roots_stubs.o choice_global_roots.cmx \

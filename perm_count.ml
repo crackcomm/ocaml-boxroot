@@ -1,6 +1,7 @@
 module Config = struct
   let choices = [
-    "ocaml", `OCaml;
+    "ocaml-persistent", `OCaml_persistent;
+    "ocaml-ephemeral", `OCaml_ephemeral;
     "gc", `Gc;
     "global-roots", `Global_roots;
     "generational-global-roots", `Generational_global_roots;
@@ -49,7 +50,8 @@ end
 
 let choice_module : (module LinChoice) =
   match Config.choice with
-  | `OCaml -> (module Choice_ocaml)
+  | `OCaml_persistent -> (module Choice_ocaml_persistent)
+  | `OCaml_ephemeral -> (module Choice_ocaml_ephemeral)
   | `Gc -> (module Choice_gc)
   | `Global_roots -> (module Choice_global_roots)
   | `Generational_global_roots -> (module Choice_generational_global_roots)
