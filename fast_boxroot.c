@@ -12,7 +12,7 @@
 #define CHUNK_ROOTS_CAPACITY 252
 #define CHUNK_ALIGNMENT (sizeof(struct chunk))
 #define GET_CHUNK_HEADER(v)                                                    \
-  ((struct chunk *)((size_t)v - ((size_t)v % CHUNK_ALIGNMENT)))
+  ((struct chunk *)((uintptr_t)v - ((uintptr_t)v % CHUNK_ALIGNMENT)))
 
 typedef struct chunk {
   struct chunk *prev;
