@@ -10,6 +10,14 @@
 #include "fast_boxroot.h"
 #include <caml/roots.h>
 
+#ifdef __APPLE__
+static void *aligned_alloc(size_t alignment, size_t size) {
+  void *memptr = NULL;
+  posix_memalign(&memptr, alignment, size);
+  return memptr;
+}
+#endif
+
 typedef void * slot;
 
 #define CHUNK_LOG_SIZE 12 // 4KB
