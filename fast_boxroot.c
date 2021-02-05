@@ -12,7 +12,7 @@
 
 typedef void * slot;
 
-#define CHUNK_LOG_SIZE 11 // 2KB
+#define CHUNK_LOG_SIZE 12 // 4KB
 #define CHUNK_SIZE (1 << CHUNK_LOG_SIZE)
 #define HEADER_SIZE 4
 #define CHUNK_ROOTS_CAPACITY (CHUNK_SIZE / sizeof(slot) - HEADER_SIZE)
