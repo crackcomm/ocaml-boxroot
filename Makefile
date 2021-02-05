@@ -5,7 +5,8 @@ CHOICE_MODULES = \
   abstract_value.o \
   choice_global_roots_stubs.o choice_global_roots.cmx \
   choice_generational_global_roots_stubs.o choice_generational_global_roots.cmx \
-  boxroot.o choice_boxroots_stubs.o choice_boxroots.cmx
+  boxroot.o choice_boxroots_stubs.o choice_boxroots.cmx \
+  fast_boxroot.o choice_fast_boxroots_stubs.o choice_fast_boxroots.cmx
 
 perm_count: $(CHOICE_MODULES) perm_count.ml
 	ocamlopt -g -c perm_count.ml
@@ -33,3 +34,5 @@ bench: perm_count
 	time ./perm_count generational-global-roots 10
 	@echo
 	time ./perm_count fake-boxroots 10
+	@echo
+	time ./perm_count fast-boxroots 10
