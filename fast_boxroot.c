@@ -143,12 +143,12 @@ static void fast_boxroot_scan_roots(scanning_action action) {
 
 // Must be called to set the hook
 void fast_boxroot_scan_hook_setup() {
-  fast_boxroot_prev_scan_roots_hook = scan_roots_hook;
-  scan_roots_hook = fast_boxroot_scan_roots;
+  fast_boxroot_prev_scan_roots_hook = caml_scan_roots_hook;
+  caml_scan_roots_hook = fast_boxroot_scan_roots;
 }
 
 void fast_boxroot_scan_hook_teardown() {
-  scan_roots_hook = fast_boxroot_prev_scan_roots_hook;
+  caml_scan_roots_hook = fast_boxroot_prev_scan_roots_hook;
   fast_boxroot_prev_scan_roots_hook = NULL;
 }
 
