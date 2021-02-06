@@ -25,8 +25,10 @@ typedef void * slot;
 
 #define CHUNK_LOG_SIZE 12 // 4KB
 #define CHUNK_SIZE (1 << CHUNK_LOG_SIZE)
-#define HEADER_SIZE 4
+#define HEADER_SIZE 5
 #define CHUNK_ROOTS_CAPACITY (CHUNK_SIZE / sizeof(slot) - HEADER_SIZE)
+#define LOW_CAPACITY_THRESHOLD 50 // 50% capacity before promoting a
+                                  // young chunk.
 
 typedef struct chunk {
   struct chunk *prev;
@@ -36,6 +38,8 @@ typedef struct chunk {
   // Unoccupied slots are either NULL or a pointer to the next free
   // slot. The null value acts as a terminator: if a slot is null,
   // then all subsequent slots are null (bump pointer optimisation).
+  size_t capacity; // Number of non-null slots, updated at the end of
+                   // each scan.
   slot roots[CHUNK_ROOTS_CAPACITY];
 } chunk;
 
@@ -218,6 +222,7 @@ static int scan_chunk(scanning_action action, chunk * chunk)
     slot v = chunk->roots[i];
     if (v == NULL) {
       // We can skip the rest if the pointer value is NULL.
+      chunk->capacity = i;
       return ++i;
     }
     if (get_chunk_header(v) != chunk) {
@@ -227,6 +232,7 @@ static int scan_chunk(scanning_action action, chunk * chunk)
       (*action)((value)v, (value *) &chunk->roots[i]);
     }
   }
+  chunk->capacity = i;
   return i;
 }
 
@@ -246,10 +252,15 @@ static void scan_for_minor(scanning_action action)
   ++stats.minor_collections;
   if (young_chunks == NULL) return;
   int work = scan_chunks(action, young_chunks);
-  // promote minor chunks
-  ring_insert(young_chunks, &old_chunks);
-  young_chunks = NULL;
   stats.total_scanning_work_minor += work;
+  // promote minor chunks
+  chunk *new_young_chunk = NULL;
+  if ((young_chunks->capacity * 100 / CHUNK_ROOTS_CAPACITY) <=
+      LOW_CAPACITY_THRESHOLD)
+    new_young_chunk = ring_pop(&young_chunks);
+  ring_insert(young_chunks, &old_chunks);
+  // allocate the new young chunk lazily
+  young_chunks = new_young_chunk;
 }
 
 static void scan_for_major(scanning_action action)
