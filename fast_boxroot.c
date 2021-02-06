@@ -21,6 +21,11 @@ static void *aligned_alloc(size_t alignment, size_t size) {
 
 static const int do_print_stats = 1;
 
+// Allocate immediates with malloc to avoid scanning them? Note: if
+// this is shown to matter, one can easily introduce a third ring for
+// immediates.
+#define IMMEDIATES_OPTIM
+
 typedef void * slot;
 
 #define CHUNK_LOG_SIZE 12 // 4KB
@@ -36,11 +41,9 @@ typedef struct chunk {
   struct chunk *next;
   slot *free_list;
   size_t free_count;
-  // Unoccupied slots are either NULL or a pointer to the next free slot.
-  // Upon initialization, all slots are NULL. Only after a slot has been
-  // "freed" will it contain a pointer to the next free slot.
-  // When a slot is NULL, it can be safely assumed that all slots that
-  // follow are NULL too.
+  // Unoccupied slots are either NULL or a pointer to the next free
+  // slot. The null value acts as a terminator: if a slot is null,
+  // then all subsequent slots are null (bump pointer optimisation).
   slot roots[CHUNK_ROOTS_CAPACITY];
 } chunk;
 
@@ -64,7 +67,7 @@ static struct {
   int total_alloced_chunks;
   int live_chunks;
   int peak_chunks;
-} stats = { 0 };
+} stats; // zero-initialized
 
 static chunk * alloc_chunk()
 {
@@ -86,8 +89,25 @@ static chunk * alloc_chunk()
   return out;
 }
 
+static void ring_insert(chunk *source, chunk **target)
+{
+  chunk *old = *target;
+  if (old == NULL) {
+    *target = source;
+  } else {
+    chunk *last = old->prev;
+    last->next = source;
+    source->prev->next = old;
+    old->prev = source->prev;
+    source->prev = last;
+    *target = young_chunks;
+  }
+}
+
 static chunk * get_available_chunk(class class)
 {
+  // In the absence of immediates optimisation, place the immediates
+  // with the old values.
   chunk **chunk_ring = (class == YOUNG) ? &young_chunks : &old_chunks;
   chunk *start_chunk = *chunk_ring;
   CAMLassert(start_chunk);
@@ -103,19 +123,18 @@ static chunk * get_available_chunk(class class)
        next_chunk = next_chunk->next) {
     if (next_chunk->free_count > 0) {
       // Rotate the ring, making the chunk with free slots the head
-      // TODO: maybe better reordering?
+      // TODO: maybe better reordering? @gasche: A natural reordering
+      // would be to move all the full chunks that were traversed to
+      // the end of the chunk list. But this requires a chunk-list
+      // structure that knows about both the first and the last
+      // elements.
       *chunk_ring = next_chunk;
       return next_chunk;
     }
   }
 
   // None found, add a new chunk at the start
-  chunk *new_chunk = alloc_chunk();
-  new_chunk->next = start_chunk;
-  new_chunk->prev = start_chunk->prev;
-  start_chunk->prev = new_chunk;
-  new_chunk->prev->next = new_chunk;
-  *chunk_ring = new_chunk;
+  ring_insert(alloc_chunk(), chunk_ring);
 
   return new_chunk;
 }
@@ -128,7 +147,7 @@ static value * alloc_boxroot(class class)
   CAMLassert(class != UNTRACKED);
   chunk *chunk = get_available_chunk(class);
   // TODO Latency: bound the number of young roots alloced at each
-  // minor collection.
+  // minor collection by scheduling a minor collection.
 
   slot *root = chunk->free_list;
   chunk->free_count -= 1;
@@ -184,11 +203,13 @@ static int scan_chunk(scanning_action action, chunk * chunk)
   for (; i < CHUNK_ROOTS_CAPACITY; ++i) {
     slot v = chunk->roots[i];
     if (v == NULL) {
-      // We can skip the rest if the pointer value is NULL
+      // We can skip the rest if the pointer value is NULL.
       return ++i;
     }
-    if (chunk != GET_CHUNK_HEADER(v)) {
-      // The value is an OCaml block
+    if (GET_CHUNK_HEADER(v) != chunk) {
+      // The value is an OCaml block (or possibly an immediate whose
+      // msbs differ from those of chunk, if the immediates
+      // optimisation is turned off).
       (*action)((value)v, (value *) &chunk->roots[i]);
     }
   }
@@ -198,7 +219,7 @@ static int scan_chunk(scanning_action action, chunk * chunk)
 static int scan_chunks(scanning_action action, chunk * start_chunk)
 {
   int work = 0;
-  if (!start_chunk) return work;
+  if (start_chunk == NULL) return work;
   work += scan_chunk(action, start_chunk);
   for (chunk *chunk = start_chunk->next; chunk != start_chunk; chunk = chunk->next) {
     work += scan_chunk(action, chunk);
@@ -209,19 +230,10 @@ static int scan_chunks(scanning_action action, chunk * start_chunk)
 static void scan_for_minor(scanning_action action)
 {
   ++stats.minor_collections;
-  if (!young_chunks) return;
+  if (young_chunks == NULL) return;
   int work = scan_chunks(action, young_chunks);
   // promote minor chunks
-  if (!old_chunks) {
-    old_chunks = young_chunks;
-  } else {
-    chunk * last = old_chunks->prev;
-    last->next = young_chunks;
-    young_chunks->prev->next = old_chunks;
-    old_chunks->prev = young_chunks->prev;
-    young_chunks->prev = last;
-    old_chunks = young_chunks;
-  }
+  ring_insert(young_chunks, &old_chunks);
   young_chunks = alloc_chunk();//TODO: init lazily
   stats.total_scanning_work_minor += work;
 }
@@ -300,7 +312,9 @@ void fast_boxroot_scan_hook_teardown()
 
 static class classify_root(value v)
 {
+#ifdef IMMEDIATES_OPTIM
   if(!Is_block(v)) return UNTRACKED;
+#endif
   if(Is_young(v)) return YOUNG;
 /*#ifndef NO_NAKED_POINTERS
   if(!Is_in_heap(v)) return UNTRACKED;
@@ -312,9 +326,11 @@ static inline boxroot boxroot_create(value init, class class)
 {
   value *cell;
   switch (class) {
+#ifdef IMMEDIATES_OPTIM
   case UNTRACKED:
     cell = (value *) malloc(sizeof(value));
     break;
+#endif
   default:
     cell = alloc_boxroot(class);
   }
@@ -342,9 +358,11 @@ static inline void boxroot_delete(boxroot root, class class)
 {
   value *cell = boxroot_get(root);
   switch (class) {
+#ifdef IMMEDIATES_OPTIM
   case UNTRACKED:
     free(cell);
     break;
+#endif
   default:
     free_boxroot(cell);
   }
@@ -353,7 +371,11 @@ static inline void boxroot_delete(boxroot root, class class)
 void fast_boxroot_delete(boxroot root)
 {
   CAMLassert(root);
+#ifdef IMMEDIATES_OPTIM
   boxroot_delete(root, classify_root(*boxroot_get(root)));
+#else
+  boxroot_delete(root, OLD /* irrelevant */);
+#endif
 }
 
 void fast_boxroot_modify(boxroot *root, value new_value)
