@@ -28,9 +28,6 @@ typedef void * slot;
 #define HEADER_SIZE 4
 #define CHUNK_ROOTS_CAPACITY (CHUNK_SIZE / sizeof(slot) - HEADER_SIZE)
 
-#define GET_CHUNK_HEADER(v)                                                    \
-  ((struct chunk *)((uintptr_t)v & ~((uintptr_t)CHUNK_SIZE - 1)))
-
 typedef struct chunk {
   struct chunk *prev;
   struct chunk *next;
@@ -43,6 +40,11 @@ typedef struct chunk {
 } chunk;
 
 static_assert(sizeof(chunk) <= CHUNK_SIZE, "bad chunk size");
+
+static inline chunk * get_chunk_header(slot v)
+{
+  return (chunk *)((uintptr_t)v & ~((uintptr_t)CHUNK_SIZE - 1));
+}
 
 // Rings of chunks
 static chunk *old_chunks = NULL; // Contains only roots pointing to
@@ -184,7 +186,7 @@ static value * alloc_boxroot(class class)
 static void free_boxroot(value *root)
 {
   slot *v = (slot *)root;
-  chunk *chunk = GET_CHUNK_HEADER(v);
+  chunk *c = get_chunk_header(v);
 
   *v = c->free_list;
   c->free_list = (slot)v;
@@ -221,7 +223,7 @@ static int scan_chunk(scanning_action action, chunk * chunk)
       // We can skip the rest if the pointer value is NULL.
       return ++i;
     }
-    if (GET_CHUNK_HEADER(v) != chunk) {
+    if (get_chunk_header(v) != chunk) {
       // The value is an OCaml block (or possibly an immediate whose
       // msbs differ from those of [chunk], if the immediates
       // optimisation were to be turned off).
