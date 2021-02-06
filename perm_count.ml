@@ -105,4 +105,5 @@ let count_permutations n =
 let () =
   Choice_fast_boxroots.setup ();
   let count = count_permutations Config.n in
-  Printf.printf "%Ld\n%!" count
+  Printf.printf "%Ld\n%!" count;
+  Choice_fast_boxroots.teardown ();

@@ -13,3 +13,4 @@ external choice : 'a t -> 'a t -> 'at = "choice_fbr_choice"
 external run : 'a t -> ('a -> unit) -> unit = "choice_fbr_run"
 
 external setup : unit -> unit = "fast_boxroot_scan_hook_setup"
+external teardown : unit -> unit = "fast_boxroot_scan_hook_teardown"
