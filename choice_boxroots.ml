@@ -11,3 +11,10 @@ external fail : unit -> 'a t = "choice_br_fail"
 external choice : 'a t -> 'a t -> 'at = "choice_br_choice"
 
 external run : 'a t -> ('a -> unit) -> unit = "choice_br_run"
+
+external setup : unit -> unit = "boxroot_scan_hook_setup"
+external teardown : unit -> unit = "boxroot_scan_hook_teardown"
+
+let () =
+  setup ();
+  at_exit teardown;

@@ -1,22 +1,22 @@
-#include "boxroot.h"
+#include "fake_boxroot.h"
 #include <caml/memory.h>
 
-boxroot boxroot_create(value init)
+fake_boxroot fake_boxroot_create(value init)
 {
   value * v = (value *) malloc(sizeof(value));
   if (!v) return NULL;
   *v = init;
   caml_register_generational_global_root(v);
-  return (boxroot)v;
+  return (fake_boxroot)v;
 }
 
-value const * boxroot_get(boxroot r)
+value const * fake_boxroot_get(fake_boxroot r)
 {
   CAMLassert(r);
   return (value const *)r;
 }
 
-void boxroot_delete(boxroot r)
+void fake_boxroot_delete(fake_boxroot r)
 {
   value * v = (value *) r;
   CAMLassert(v);
@@ -24,7 +24,7 @@ void boxroot_delete(boxroot r)
   free(v);
 }
 
-void boxroot_modify(boxroot * r, value new)
+void fake_boxroot_modify(fake_boxroot * r, value new)
 {
   value * v = (value *) *r;
   CAMLassert(v);
