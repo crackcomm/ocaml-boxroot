@@ -132,16 +132,13 @@ static chunk * get_available_chunk(class class)
     chunk *next_chunk = NULL;
 
     // Find a chunk with available slots
+    // TODO: maybe better lookup by putting the more empty chunks in the front
+    // during scanning.
     for (next_chunk = start_chunk->next;
          next_chunk != start_chunk;
          next_chunk = next_chunk->next) {
       if (next_chunk->free_count > 0) {
         // Rotate the ring, making the chunk with free slots the head
-        // TODO: maybe better reordering? @gasche: A natural reordering
-        // would be to move all the full chunks that were traversed to
-        // the end of the chunk list. But this requires a chunk-list
-        // structure that knows about both the first and the last
-        // elements.
         *chunk_ring = next_chunk;
         return next_chunk;
       }
