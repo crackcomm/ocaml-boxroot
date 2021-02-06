@@ -33,7 +33,11 @@ typedef struct chunk {
   struct chunk *next;
   slot *free_list;
   size_t free_count;
-  // Unoccupied slots are either NULL or a pointer to the next free slot
+  // Unoccupied slots are either NULL or a pointer to the next free slot.
+  // Upon initialization, all slots are NULL. Only after a slot has been
+  // "freed" will it contain a pointer to the next free slot.
+  // When a slot is NULL, it can be safely assumed that all slots that
+  // follow are NULL too.
   slot roots[CHUNK_ROOTS_CAPACITY];
 } chunk;
 
