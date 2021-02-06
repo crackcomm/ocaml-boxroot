@@ -35,6 +35,6 @@ IMPLEMENTATIONS=\
 
 .PHONY: bench
 bench: perm_count
-	export NITER=10 $(foreach IMPLEM, $(IMPLEMENTATIONS), \
+	@export NITER=10 $(foreach IMPLEM, $(IMPLEMENTATIONS), \
 	    && (echo "---"; IMPLEM=$(IMPLEM) ./perm_count) \
 	)

@@ -40,5 +40,5 @@ let count_permutations n =
 let () =
   Printf.printf "%s: %!" Config.implem;
   let count = count_permutations Config.n in
-  Printf.printf "%f\n%!" (Sys.time ());
+  Printf.printf "%.2fs\n%!" (Sys.time ());
   Printf.printf "count: %Ld\n%!" count;

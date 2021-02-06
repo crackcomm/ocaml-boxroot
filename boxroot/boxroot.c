@@ -298,18 +298,25 @@ static int average(int total_work, int nb_collections) {
 
 static void print_stats()
 {
+  printf("minor collections: %d\n"
+         "major collections: %d\n",
+         stats.minor_collections,
+         stats.major_collections);
+
   int scanning_work_minor = average(stats.total_scanning_work_minor, stats.minor_collections);
   int scanning_work_major = average(stats.total_scanning_work_major, stats.major_collections);
   int total_mib = mib_of_chunks(stats.total_alloced_chunks);
   int peak_mib = mib_of_chunks(stats.peak_chunks);
-  printf("minor collections: %d\n"
-         "major collections: %d\n"
-         "work per minor: %d\n"
+
+  if (scanning_work_minor == 0
+      && scanning_work_major == 0
+      && stats.total_alloced_chunks == 0)
+    return;
+
+  printf("work per minor: %d\n"
          "work per major: %d\n"
          "total allocated chunks: %d (%d MiB)\n"
          "peak allocated chunks: %d (%d MiB)\n",
-         stats.minor_collections,
-         stats.major_collections,
          scanning_work_minor,
          scanning_work_major,
          stats.total_alloced_chunks, total_mib,

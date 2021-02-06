@@ -29,49 +29,54 @@ Currently we have implemented:
 
 ```
 $ make bench
-time ./perm_count ocaml-persistent 10
-3628800
-2.74user 0.28system 0:03.03elapsed 99%CPU (0avgtext+0avgdata 715040maxresident)k
-0inputs+0outputs (0major+179246minor)pagefaults 0swaps
-
-time ./perm_count ocaml-ephemeral 10
-3628800
-2.52user 0.25system 0:02.78elapsed 99%CPU (0avgtext+0avgdata 720444maxresident)k
-0inputs+0outputs (0major+180537minor)pagefaults 0swaps
-
-time ./perm_count gc 10
-3628800
-2.81user 0.19system 0:03.01elapsed 99%CPU (0avgtext+0avgdata 715520maxresident)k
-0inputs+0outputs (0major+179301minor)pagefaults 0swaps
-
-time ./perm_count global-roots 10
-3628800
-13.67user 0.31system 0:13.99elapsed 99%CPU (0avgtext+0avgdata 851608maxresident)k
-0inputs+0outputs (0major+213372minor)pagefaults 0swaps
-
-time ./perm_count generational-global-roots 10
-3628800
-5.54user 0.26system 0:05.81elapsed 99%CPU (0avgtext+0avgdata 853736maxresident)k
-0inputs+0outputs (0major+213913minor)pagefaults 0swaps
-
-time ./perm_count fake-boxroots 10
-3628800
-5.67user 0.31system 0:05.99elapsed 99%CPU (0avgtext+0avgdata 967444maxresident)k
-0inputs+0outputs (0major+242288minor)pagefaults 0swaps
-
-time ./perm_count fast-boxroots 10
-3628800
-2.70user 0.30system 0:03.00elapsed 99%CPU (0avgtext+0avgdata 762360maxresident)k
-0inputs+0outputs (0major+191032minor)pagefaults 0swaps
+---
+ocaml-persistent: 1.96s
+count: 3628800
+minor collections: 1116
+major collections: 18
+---
+ocaml-ephemeral: 1.88s
+count: 3628800
+minor collections: 865
+major collections: 18
+---
+gc: 2.09s
+count: 3628800
+minor collections: 737
+major collections: 18
+---
+global-roots: 12.05s
+count: 3628800
+minor collections: 526
+major collections: 16
+---
+generational-global-roots: 4.35s
+count: 3628800
+minor collections: 526
+major collections: 16
+---
+fake-boxroots: 4.29s
+count: 3628800
+minor collections: 526
+major collections: 16
+---
+boxroots: 2.04s
+count: 3628800
+minor collections: 526
+major collections: 16
+work per minor: 7686
+work per major: 567779
+total allocated chunks: 8150 (31 MiB)
+peak allocated chunks: 8150 (31 MiB)
 ```
 
-We see that global roots add a large overhead (14s compared to 3s when
+We see that global roots add a large overhead (12s compared to 2s when
 using the OCaml GC), which is largely reduced by using generational
-global roots (6s).
+global roots (4.3s).
 
 "Fake" boxroots (generational roots made movable by placing them in
-their owned malloc'ed value) are barely slower than generational
+their owned malloc'ed value) are exactly as fast as generational
 global roots.
 
-"Fast" boxroots (implemented with a custom allocator) are competitive
+Real boxroots (implemented with a custom allocator) are competitive
 with implementations that do not use per-element roots.
