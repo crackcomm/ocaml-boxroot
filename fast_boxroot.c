@@ -23,7 +23,7 @@ static const int do_print_stats = 1;
 
 typedef void * slot;
 
-#define CHUNK_LOG_SIZE 12 // 4KB
+#define CHUNK_LOG_SIZE 10 // 4KB
 #define CHUNK_SIZE (1 << CHUNK_LOG_SIZE)
 #define HEADER_SIZE 4
 #define CHUNK_ROOTS_CAPACITY (CHUNK_SIZE / sizeof(slot) - HEADER_SIZE)
@@ -240,22 +240,31 @@ static void fast_boxroot_scan_roots(scanning_action action)
   }
 }
 
+static int mib_of_chunks(int count)
+{
+  int log_per_chunk = CHUNK_LOG_SIZE - 20;
+  if (log_per_chunk >= 0) return count << log_per_chunk;
+  if (log_per_chunk < 0) return count >> -log_per_chunk;
+}
+
 static void print_stats()
 {
   int scanning_work_minor = stats.total_scanning_work_minor / stats.minor_collections;
   int scanning_work_major = stats.total_scanning_work_major / stats.major_collections;
+  int total_mib = mib_of_chunks(stats.total_alloced_chunks);
+  int peak_mib = mib_of_chunks(stats.peak_chunks);
   printf("minor collections: %d\n"
          "major collections: %d\n"
          "work per minor: %d\n"
          "work per major: %d\n"
-         "total allocated chunks: %d\n"
-         "peak allocated chunks: %d\n",
+         "total allocated chunks: %d (%d MiB)\n"
+         "peak allocated chunks: %d (%d MiB)\n",
          stats.minor_collections,
          stats.major_collections,
          scanning_work_minor,
          scanning_work_major,
-         stats.total_alloced_chunks,
-         stats.peak_chunks);
+         stats.total_alloced_chunks, total_mib,
+         stats.peak_chunks, peak_mib);
 }
 
 // Must be called to set the hook
