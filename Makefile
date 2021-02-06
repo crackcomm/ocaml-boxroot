@@ -20,19 +20,20 @@ boxroot/boxroot.o: boxroot/boxroot.c
 clean::
 	make -C boxroot clean
 
+EMPTY=
+
+IMPLEMENTATIONS=\
+  ocaml-persistent \
+  ocaml-ephemeral \
+  gc \
+  global-roots \
+  generational-global-roots \
+  fake-boxroots \
+  boxroots \
+  $(EMPTY)
+
 .PHONY: bench
 bench: perm_count
-	export NITER=10
-	time IMPLEM=ocaml-persistent ./perm_count
-	@echo
-	time IMPLEM=ocaml-ephemeral ./perm_count
-	@echo
-	time IMPLEM=gc ./perm_count
-	@echo
-	time IMPLEM=global-roots ./perm_count
-	@echo
-	time IMPLEM=generational-global-roots ./perm_count
-	@echo
-	time IMPLEM=fake-boxroots ./perm_count
-	@echo
-	time IMPLEM=boxroots ./perm_count
+	export NITER=10 $(foreach IMPLEM, $(IMPLEMENTATIONS), \
+	    && (IMPLEM=$(IMPLEM) time ./perm_count) \
+	)
