@@ -19,6 +19,8 @@ static void *aligned_alloc(size_t alignment, size_t size) {
 }
 #endif
 
+static const int do_print_stats = 1;
+
 typedef void * slot;
 
 #define CHUNK_LOG_SIZE 12 // 4KB
@@ -50,8 +52,22 @@ typedef enum class {
   UNTRACKED
 } class;
 
+static struct {
+  int minor_collections;
+  int major_collections;
+  int total_scanning_work_minor;
+  int total_scanning_work_major;
+  int total_alloced_chunks;
+  int live_chunks;
+  int peak_chunks;
+} stats = { 0 };
+
 static chunk * alloc_chunk()
 {
+  ++stats.total_alloced_chunks;
+  ++stats.live_chunks;
+  if (stats.live_chunks > stats.peak_chunks) stats.peak_chunks = stats.live_chunks;
+
   chunk *out = aligned_alloc(CHUNK_SIZE, CHUNK_SIZE); // TODO: not portable
 
   if (!out) {
@@ -157,34 +173,39 @@ static int is_minor_scanning(scanning_action action)
   return action == &caml_oldify_one;
 }
 
-static void scan_chunk(scanning_action action, chunk * chunk)
+static int scan_chunk(scanning_action action, chunk * chunk)
 {
-  for (int i = 0; i < CHUNK_ROOTS_CAPACITY; ++i) {
+  int i = 0;
+  for (; i < CHUNK_ROOTS_CAPACITY; ++i) {
     slot v = chunk->roots[i];
     if (!v) {
       // We can skip the rest if the pointer value is NULL
-      break;
+      return ++i;
     }
     if (chunk != GET_CHUNK_HEADER(v)) {
       // The value is an OCaml block
       (*action)((value)v, (value *) &chunk->roots[i]);
     }
   }
+  return i;
 }
 
-static void scan_chunks(scanning_action action, chunk * start_chunk)
+static int scan_chunks(scanning_action action, chunk * start_chunk)
 {
-  if (!start_chunk) return;
-  scan_chunk(action, start_chunk);
+  int work = 0;
+  if (!start_chunk) return work;
+  work += scan_chunk(action, start_chunk);
   for (chunk *chunk = start_chunk->next; chunk != start_chunk; chunk = chunk->next) {
-    scan_chunk(action, chunk);
+    work += scan_chunk(action, chunk);
   }
+  return work;
 }
 
 static void scan_for_minor(scanning_action action)
 {
+  ++stats.minor_collections;
   if (!young_chunks) return;
-  scan_chunks(action, young_chunks);
+  int work = scan_chunks(action, young_chunks);
   // promote minor chunks
   if (!old_chunks) {
     old_chunks = young_chunks;
@@ -197,12 +218,15 @@ static void scan_for_minor(scanning_action action)
     old_chunks = young_chunks;
   }
   young_chunks = alloc_chunk();//TODO: init lazily
+  stats.total_scanning_work_minor += work;
 }
 
 static void scan_for_major(scanning_action action)
 {
-  scan_chunks(action, young_chunks);
-  scan_chunks(action, old_chunks);
+  ++stats.major_collections;
+  int work = scan_chunks(action, young_chunks);
+  work += scan_chunks(action, old_chunks);
+  stats.total_scanning_work_major += work;
 }
 
 static void fast_boxroot_scan_roots(scanning_action action)
@@ -215,6 +239,24 @@ static void fast_boxroot_scan_roots(scanning_action action)
   if (fast_boxroot_prev_scan_roots_hook) {
     (*fast_boxroot_prev_scan_roots_hook)(action);
   }
+}
+
+static void print_stats()
+{
+  int scanning_work_minor = stats.total_scanning_work_minor / stats.minor_collections;
+  int scanning_work_major = stats.total_scanning_work_major / stats.major_collections;
+  printf("minor collections: %d\n"
+         "major collections: %d\n"
+         "work per minor: %d\n"
+         "work per major: %d\n"
+         "total allocated chunks: %d\n"
+         "peak allocated chunks: %d\n",
+         stats.minor_collections,
+         stats.major_collections,
+         scanning_work_minor,
+         scanning_work_major,
+         stats.total_alloced_chunks,
+         stats.peak_chunks);
 }
 
 // Must be called to set the hook
@@ -230,6 +272,7 @@ void fast_boxroot_scan_hook_teardown()
 {
   caml_scan_roots_hook = fast_boxroot_prev_scan_roots_hook;
   fast_boxroot_prev_scan_roots_hook = NULL;
+  if (do_print_stats) print_stats();
   //TODO: free all chunks
 }
 
