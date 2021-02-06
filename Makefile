@@ -5,21 +5,20 @@ CHOICE_MODULES = \
   abstract_value.o \
   choice_global_roots_stubs.o choice_global_roots.cmx \
   choice_generational_global_roots_stubs.o choice_generational_global_roots.cmx \
-  boxroot.o choice_boxroots_stubs.o choice_boxroots.cmx \
-  fast_boxroot.o choice_fast_boxroots_stubs.o choice_fast_boxroots.cmx
+  fake_boxroot.o choice_fake_boxroots_stubs.o choice_fake_boxroots.cmx \
+  boxroot/boxroot.o choice_boxroots_stubs.o choice_boxroots.cmx
 
 perm_count: $(CHOICE_MODULES) perm_count.ml
 	ocamlopt -g -c perm_count.ml
 	ocamlopt -g -o $@ $(CHOICE_MODULES) perm_count.cmx
 
-%.cmx: %.ml
-	ocamlopt -g -c $<
+include Makefile.common
 
-%.o: %.c *.h
-	ocamlopt -g -c $<
+boxroot/boxroot.o: boxroot/boxroot.c
+	$(MAKE) -C boxroot boxroot.o
 
-clean:
-	rm -f *.cm* *.o
+clean::
+	make -C boxroot clean
 
 .PHONY: bench
 bench: perm_count
@@ -35,4 +34,4 @@ bench: perm_count
 	@echo
 	time ./perm_count fake-boxroots 10
 	@echo
-	time ./perm_count fast-boxroots 10
+	time ./perm_count boxroots 10

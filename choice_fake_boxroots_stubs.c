@@ -8,23 +8,23 @@
 #include <caml/callback.h>
 
 /* In this module, the choice monad is implemented using
-   linked-list of OCaml values, stored in fast boxroots */
+   linked-list of OCaml values, registered as global roots */
 
 #include "linked_list.h"
-#include "fast_boxroot.h"
+#include "fake_boxroot.h"
 
 static value node_val_get(struct node *node) {
-    return *(fast_boxroot_get((boxroot) node->hd));
+    return *(fake_boxroot_get((fake_boxroot) node->hd));
 }
 static void node_val_set(struct node *node, value v) {
-    fast_boxroot_modify((boxroot *) &(node->hd), v);
+    fake_boxroot_modify((fake_boxroot *) &(node->hd), v);
 }
 
 static void node_val_init(struct node *node, value v) {
-    node->hd = (void *) fast_boxroot_create(v);
+    node->hd = (void *) fake_boxroot_create(v);
 }
 static void node_val_free(struct node *node) {
-    fast_boxroot_delete((boxroot) node->hd);
+    fake_boxroot_delete((fake_boxroot) node->hd);
 }
 
 /* C-style functor applications */
