@@ -5,8 +5,8 @@ module Config = struct
     "gc", `Gc;
     "global-roots", `Global_roots;
     "generational-global-roots", `Generational_global_roots;
-    "fake-boxroots", `Boxroots;
-    "fast-boxroots", `Fast_boxroots;
+    "fake-boxroots", `Fake_boxroots;
+    "boxroots", `Boxroots;
   ]
 
   let wrong_usage () =
@@ -56,8 +56,8 @@ let choice_module : (module LinChoice) =
   | `Gc -> (module Choice_gc)
   | `Global_roots -> (module Choice_global_roots)
   | `Generational_global_roots -> (module Choice_generational_global_roots)
+  | `Fake_boxroots -> (module Choice_fake_boxroots)
   | `Boxroots -> (module Choice_boxroots)
-  | `Fast_boxroots -> (module Choice_fast_boxroots)
 
 module Choice = (val choice_module : LinChoice)
 
@@ -103,7 +103,5 @@ let count_permutations n =
   !counter
 
 let () =
-  Choice_fast_boxroots.setup ();
   let count = count_permutations Config.n in
   Printf.printf "%Ld\n%!" count;
-  Choice_fast_boxroots.teardown ();

@@ -7,7 +7,7 @@
 
 #define CAML_INTERNALS
 
-#include "fast_boxroot.h"
+#include "boxroot.h"
 #include <caml/roots.h>
 #include <caml/minor_gc.h>
 
@@ -208,7 +208,7 @@ static void free_boxroot(value *root)
 
 // Scanning
 
-static void (*fast_boxroot_prev_scan_roots_hook)(scanning_action);
+static void (*boxroot_prev_scan_roots_hook)(scanning_action);
 
 static int is_minor_scanning(scanning_action action)
 {
@@ -271,15 +271,15 @@ static void scan_for_major(scanning_action action)
   stats.total_scanning_work_major += work;
 }
 
-static void fast_boxroot_scan_roots(scanning_action action)
+static void boxroot_scan_roots(scanning_action action)
 {
   if (is_minor_scanning(action)) {
     scan_for_minor(action);
   } else {
     scan_for_major(action);
   }
-  if (fast_boxroot_prev_scan_roots_hook) {
-    (*fast_boxroot_prev_scan_roots_hook)(action);
+  if (boxroot_prev_scan_roots_hook != NULL) {
+    (*boxroot_prev_scan_roots_hook)(action);
   }
 }
 
@@ -317,23 +317,23 @@ static void print_stats()
 }
 
 // Must be called to set the hook
-void fast_boxroot_scan_hook_setup()
+void boxroot_scan_hook_setup()
 {
-  fast_boxroot_prev_scan_roots_hook = caml_scan_roots_hook;
-  caml_scan_roots_hook = fast_boxroot_scan_roots;
+  boxroot_prev_scan_roots_hook = caml_scan_roots_hook;
+  caml_scan_roots_hook = boxroot_scan_roots;
 }
 
-void fast_boxroot_scan_hook_teardown()
+void boxroot_scan_hook_teardown()
 {
-  caml_scan_roots_hook = fast_boxroot_prev_scan_roots_hook;
-  fast_boxroot_prev_scan_roots_hook = NULL;
+  caml_scan_roots_hook = boxroot_prev_scan_roots_hook;
+  boxroot_prev_scan_roots_hook = NULL;
   if (do_print_stats) print_stats();
   //TODO: free all chunks
 }
 
 // Boxroot API implementation
 
-static class classify_root(value v)
+static class classify_value(value v)
 {
   if(!Is_block(v)) return UNTRACKED;
   if(Is_young(v)) return YOUNG;
@@ -343,7 +343,12 @@ static class classify_root(value v)
   return OLD;
 }
 
-static inline boxroot boxroot_create(value init, class class)
+static class classify_boxroot(boxroot root)
+{
+    return classify_value(*(value *)root);
+}
+
+static inline boxroot boxroot_create_classified(value init, class class)
 {
   value *cell;
   switch (class) {
@@ -357,29 +362,24 @@ static inline boxroot boxroot_create(value init, class class)
   default:
     cell = alloc_boxroot(class);
   }
-  if (cell) *cell = init;
+  if (cell != NULL) *cell = init;
   return (boxroot)cell;
 }
 
-boxroot fast_boxroot_create(value init)
+boxroot boxroot_create(value init)
 {
-  return boxroot_create(init, classify_root(init));
+  return boxroot_create_classified(init, classify_value(init));
 }
 
-static inline value * boxroot_get(boxroot root)
+value const * boxroot_get(boxroot root)
 {
+  CAMLassert (root);
   return (value *)root;
 }
 
-value const * fast_boxroot_get(boxroot root)
+static inline void boxroot_delete_classified(boxroot root, class class)
 {
-  CAMLassert(root);
-  return boxroot_get(root);
-}
-
-static inline void boxroot_delete(boxroot root, class class)
-{
-  value *cell = boxroot_get(root);
+  value *cell = (value *)root;
   switch (class) {
   case UNTRACKED:
     free(cell);
@@ -389,27 +389,28 @@ static inline void boxroot_delete(boxroot root, class class)
   }
 }
 
-void fast_boxroot_delete(boxroot root)
+void boxroot_delete(boxroot root)
 {
   CAMLassert(root);
-  boxroot_delete(root, classify_root(*boxroot_get(root)));
+  boxroot_delete_classified(root, classify_boxroot(root));
 }
 
-void fast_boxroot_modify(boxroot *root, value new_value)
+void boxroot_modify(boxroot *root, value new_value)
 {
-  value *old_root = boxroot_get(*root);
-  class old_class = classify_root(*old_root);
-  class new_class = classify_root(new_value);
+  CAMLassert(*root);
+  class old_class = classify_boxroot(*root);
+  class new_class = classify_value(new_value);
 
   if (old_class == new_class
       || (old_class == YOUNG && new_class == OLD)) {
     // No need to reallocate
-    *old_root = new_value;
+    value *cell = (value *)*root;
+    *cell = new_value;
     return;
   }
 
-  boxroot_delete(*root, old_class);
-  *root = boxroot_create(new_value, new_class);
+  boxroot_delete_classified(*root, old_class);
+  *root = boxroot_create_classified(new_value, new_class);
   // Note: *root can be NULL, which must be checked (in Rust, check
   // and panic here).
 }
