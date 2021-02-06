@@ -103,7 +103,6 @@ static chunk * get_available_chunk(class class)
       *chunk_ring = next_chunk;
       return next_chunk;
     }
-    break;
   }
 
   // None found, add a new chunk at the start
