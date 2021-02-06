@@ -84,6 +84,7 @@ static chunk * alloc_chunk()
   return out;
 }
 
+// insert [source] in front of [*target]
 static void ring_insert(chunk *source, chunk **target)
 {
   chunk *old = *target;
@@ -97,6 +98,22 @@ static void ring_insert(chunk *source, chunk **target)
     source->prev = last;
     *target = young_chunks;
   }
+}
+
+// remove the first element from [*target] and return it
+static chunk *ring_pop(chunk **target)
+{
+  chunk *head = *target;
+  if (head->next == head) {
+    *target = NULL;
+    return head;
+  }
+  head->prev->next = head->next;
+  head->next->prev = head->prev;
+  *target = head->next;
+  head->next = head;
+  head->prev = head;
+  return head;
 }
 
 static chunk * get_available_chunk(class class)
@@ -169,18 +186,17 @@ static void free_boxroot(value *root)
   slot *v = (slot *)root;
   chunk *chunk = GET_CHUNK_HEADER(v);
 
-  *v = chunk->free_list;
-  chunk->free_list = (slot)v;
-  chunk->free_count += 1;
+  *v = c->free_list;
+  c->free_list = (slot)v;
+  c->free_count += 1;
 
   // If none of the roots are being used, and it is not the last pool,
   // we can free it.
-  if (chunk->free_count == CHUNK_ROOTS_CAPACITY && chunk->next != chunk) {
-    chunk->prev->next = chunk->next;
-    chunk->next->prev = chunk->prev;
-    if (old_chunks == chunk) old_chunks = chunk->next;
-    if (young_chunks == chunk) young_chunks = chunk->next;
-    free(chunk);
+  if (c->free_count == CHUNK_ROOTS_CAPACITY && c->next != c) {
+    chunk *hd = ring_pop(&c);
+    if (old_chunks == hd) old_chunks = c;
+    else if (young_chunks == hd) young_chunks = c;
+    free(hd);
     // TODO: do not free immediately, keep a few empty pools aside (or
     // trust that the allocator does it, unlikely for such large
     // allocations).
