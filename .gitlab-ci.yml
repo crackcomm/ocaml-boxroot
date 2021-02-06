@@ -1,0 +1,15 @@
+image: ocaml/opam:alpine-3.13-ocaml-4.11
+
+stages:
+  - build
+
+build:
+  stage: build
+
+  artifacts:
+    paths:
+      - bench-log.txt
+
+  script:
+    - make
+    - make bench | tee bench-log.txt
