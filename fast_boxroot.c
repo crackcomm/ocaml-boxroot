@@ -23,7 +23,7 @@ static const int do_print_stats = 1;
 
 typedef void * slot;
 
-#define CHUNK_LOG_SIZE 10 // 4KB
+#define CHUNK_LOG_SIZE 12 // 4KB
 #define CHUNK_SIZE (1 << CHUNK_LOG_SIZE)
 #define HEADER_SIZE 4
 #define CHUNK_ROOTS_CAPACITY (CHUNK_SIZE / sizeof(slot) - HEADER_SIZE)
@@ -123,6 +123,8 @@ static value * alloc_boxroot(class class)
 {
   CAMLassert(class != UNTRACKED);
   chunk *chunk = get_available_chunk(class);
+  // TODO Latency: bound the number of young roots alloced at each
+  // minor collection.
 
   slot *root = chunk->free_list;
   chunk->free_count -= 1;
