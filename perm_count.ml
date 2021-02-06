@@ -1,70 +1,5 @@
-module Config = struct
-  let choices = [
-    "ocaml-persistent", `OCaml_persistent;
-    "ocaml-ephemeral", `OCaml_ephemeral;
-    "gc", `Gc;
-    "global-roots", `Global_roots;
-    "generational-global-roots", `Generational_global_roots;
-    "fake-boxroots", `Fake_boxroots;
-    "boxroots", `Boxroots;
-  ]
-
-  let wrong_usage () =
-    Printf.eprintf "Usage: %s [%s] <int>\n%!" Sys.argv.(0) (String.concat "|" (List.map fst choices));
-    exit 2
-
-  let () =
-    if Array.length Sys.argv < 3 then
-      wrong_usage ()
-
-  let choice =
-    match List.assoc_opt Sys.argv.(1) choices with
-    | Some choice -> choice
-    | None -> wrong_usage ()
-
-  let n = match int_of_string_opt Sys.argv.(2) with
-    | Some n -> n
-    | None -> wrong_usage ()
-end
-
-(* this *linear* function consumes the ownership of its argument *)
-type ('a, 'b) linfun = 'a -> 'b
-module type LinChoice = sig
-  (* a choice/non-determinism monad whose combinators are linear (own their arguments);
-     this is pointed out explicitly so that C implementation can free their input structures
-     without having to track liveness. *)
-    type 'a t
-
-    val map : ('a -> 'b) -> ('a t, 'b t) linfun
-
-    val return : 'a -> 'a t
-    val pair : ('a t, ('b t, ('a * 'b) t) linfun) linfun
-
-    val bind : ('a -> 'b t) -> ('a t, 'b t) linfun
-
-    val fail : unit -> 'a t
-    val choice : ('a t, ('a t, 'a t) linfun) linfun
-
-    val run : ('a t, ('a -> unit) -> unit) linfun
-end
-
-
-let choice_module : (module LinChoice) =
-  match Config.choice with
-  | `OCaml_persistent -> (module Choice_ocaml_persistent)
-  | `OCaml_ephemeral -> (module Choice_ocaml_ephemeral)
-  | `Gc -> (module Choice_gc)
-  | `Global_roots -> (module Choice_global_roots)
-  | `Generational_global_roots -> (module Choice_generational_global_roots)
-  | `Fake_boxroots -> (module Choice_fake_boxroots)
-  | `Boxroots -> (module Choice_boxroots)
-
-module Choice = (val choice_module : LinChoice)
-
+module Choice = Config.Choice
 open Choice
-let ( let+ ) a f = map f a
-let ( and+ ) a1 a2 = pair a1 a2
-let ( let* ) m f = bind f m
 
 let rec insert : type a . a -> a list -> a list Choice.t =
   fun elt xs -> match xs with
@@ -103,5 +38,7 @@ let count_permutations n =
   !counter
 
 let () =
+  Printf.printf "%s: %!" Config.implem;
   let count = count_permutations Config.n in
-  Printf.printf "%Ld\n%!" count;
+  Printf.printf "%f\n%!" (Sys.time ());
+  Printf.printf "count: %Ld\n%!" count;
