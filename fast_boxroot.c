@@ -21,11 +21,6 @@ static void *aligned_alloc(size_t alignment, size_t size) {
 
 static const int do_print_stats = 1;
 
-// Allocate immediates with malloc to avoid scanning them? Note: if
-// this is shown to matter, one can easily introduce a third ring for
-// immediates.
-#define IMMEDIATES_OPTIM
-
 typedef void * slot;
 
 #define CHUNK_LOG_SIZE 12 // 4KB
@@ -104,8 +99,9 @@ static void ring_insert(chunk *source, chunk **target)
 
 static chunk * get_available_chunk(class class)
 {
-  // In the absence of immediates optimisation, place the immediates
-  // with the old values.
+  // If there was no optimisation for immediates, we could always place
+  // the immediates with the old values (be careful about NULL in
+  // naked-pointers mode, though).
   chunk **chunk_ring = (class == YOUNG) ? &young_chunks : &old_chunks;
   chunk *start_chunk = *chunk_ring;
   if (start_chunk) {
@@ -209,8 +205,8 @@ static int scan_chunk(scanning_action action, chunk * chunk)
     }
     if (GET_CHUNK_HEADER(v) != chunk) {
       // The value is an OCaml block (or possibly an immediate whose
-      // msbs differ from those of chunk, if the immediates
-      // optimisation is turned off).
+      // msbs differ from those of [chunk], if the immediates
+      // optimisation were to be turned off).
       (*action)((value)v, (value *) &chunk->roots[i]);
     }
   }
@@ -311,13 +307,11 @@ void fast_boxroot_scan_hook_teardown()
 
 static class classify_root(value v)
 {
-#ifdef IMMEDIATES_OPTIM
   if(!Is_block(v)) return UNTRACKED;
-#endif
   if(Is_young(v)) return YOUNG;
-/*#ifndef NO_NAKED_POINTERS
+#ifndef NO_NAKED_POINTERS
   if(!Is_in_heap(v)) return UNTRACKED;
-#endif*/
+#endif
   return OLD;
 }
 
@@ -325,11 +319,13 @@ static inline boxroot boxroot_create(value init, class class)
 {
   value *cell;
   switch (class) {
-#ifdef IMMEDIATES_OPTIM
   case UNTRACKED:
+    // [init] can be null in naked-pointers mode, handled here.
     cell = (value *) malloc(sizeof(value));
+    // TODO: further optim: use a global table instead of malloc for
+    // very small values of [init] — for fast variants and and to
+    // handle C-side NULLs in no-naked-pointers mode if desired.
     break;
-#endif
   default:
     cell = alloc_boxroot(class);
   }
@@ -357,11 +353,9 @@ static inline void boxroot_delete(boxroot root, class class)
 {
   value *cell = boxroot_get(root);
   switch (class) {
-#ifdef IMMEDIATES_OPTIM
   case UNTRACKED:
     free(cell);
     break;
-#endif
   default:
     free_boxroot(cell);
   }
@@ -370,11 +364,7 @@ static inline void boxroot_delete(boxroot root, class class)
 void fast_boxroot_delete(boxroot root)
 {
   CAMLassert(root);
-#ifdef IMMEDIATES_OPTIM
   boxroot_delete(root, classify_root(*boxroot_get(root)));
-#else
-  boxroot_delete(root, OLD /* irrelevant */);
-#endif
 }
 
 void fast_boxroot_modify(boxroot *root, value new_value)
