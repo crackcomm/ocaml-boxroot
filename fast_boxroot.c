@@ -9,6 +9,7 @@
 
 #include "fast_boxroot.h"
 #include <caml/roots.h>
+#include <caml/minor_gc.h>
 
 #ifdef __APPLE__
 static void *aligned_alloc(size_t alignment, size_t size) {
@@ -39,16 +40,25 @@ typedef struct chunk {
 
 static_assert(sizeof(chunk) <= CHUNK_SIZE, "bad chunk size");
 
-static chunk *fast_boxroot_chunks = NULL;
+// Rings of chunks
+static chunk *old_chunks = NULL; // Contains only old roots
+static chunk *young_chunks = NULL; // Contains only young roots
 
-static chunk *alloc_chunk() {
+typedef enum class {
+  YOUNG,
+  OLD,
+  UNTRACKED
+} class;
+
+static chunk * alloc_chunk()
+{
   chunk *out = aligned_alloc(CHUNK_SIZE, CHUNK_SIZE); // TODO: not portable
 
   if (!out) {
     exit(1); // TODO: message or proper handling
   }
 
-  out->prev = out->next = NULL;
+  out->prev = out->next = out;
   out->free_list = out->roots;
   out->free_count = CHUNK_ROOTS_CAPACITY;
   memset(out->roots, 0, sizeof(out->roots));
@@ -56,62 +66,67 @@ static chunk *alloc_chunk() {
   return out;
 }
 
-static chunk *get_available_chunk() {
+static chunk * get_available_chunk(class class)
+{
+  chunk **chunk_ring = (class == YOUNG) ? &young_chunks : &old_chunks;
+  chunk *start_chunk = *chunk_ring;
+  CAMLassert(start_chunk);
+
+  if (start_chunk->free_count > 0)
+    return start_chunk;
+
   chunk *next_chunk = NULL;
-  int i = 0;
 
   // Find a chunk with available slots
-  for (i = 0, next_chunk = fast_boxroot_chunks; next_chunk;
-       next_chunk = next_chunk->next, i++) {
-    if (next_chunk->free_count) {
-      // Reorder the chunks, making the one with free slots the head
-      // TODO: maybe better reordering? doesn't make sense to have
-      // next_chunk->next point to a sequence of full chunks
-      if (next_chunk != fast_boxroot_chunks) {
-        next_chunk->prev->next = next_chunk->next;
-        if (next_chunk->next) {
-          next_chunk->next->prev = next_chunk->prev;
-        }
-        next_chunk->next = fast_boxroot_chunks;
-        fast_boxroot_chunks->prev = next_chunk;
-        fast_boxroot_chunks = next_chunk;
-      }
+  for (next_chunk = start_chunk->next;
+       next_chunk != start_chunk;
+       next_chunk = next_chunk->next) {
+    if (next_chunk->free_count > 0) {
+      // Rotate the ring, making the chunk with free slots the head
+      // TODO: maybe better reordering?
+      *chunk_ring = next_chunk;
       return next_chunk;
     }
     break;
   }
 
-  // None found, add a new chunk
-  chunk *next = fast_boxroot_chunks;
-  fast_boxroot_chunks = alloc_chunk();
-  fast_boxroot_chunks->next = next;
-  if (next) {
-    next->prev = fast_boxroot_chunks;
-  }
+  // None found, add a new chunk at the start
+  chunk *new_chunk = alloc_chunk();
+  new_chunk->next = start_chunk;
+  new_chunk->prev = start_chunk->prev;
+  start_chunk->prev = new_chunk;
+  new_chunk->prev->next = new_chunk;
+  *chunk_ring = new_chunk;
 
-  return fast_boxroot_chunks;
+  return new_chunk;
 }
 
-static boxroot alloc_boxroot() {
-  chunk *chunk = get_available_chunk();
+
+// Allocation, deallocation
+
+static value * alloc_boxroot(class class)
+{
+  CAMLassert(class != UNTRACKED);
+  chunk *chunk = get_available_chunk(class);
 
   slot *root = chunk->free_list;
   chunk->free_count -= 1;
 
-  slot value = *root;
+  slot v = *root;
   // root contains either a pointer to the next free slot or NULL
   // if it is NULL we just increase the free_list pointer to the next
-  if (!value) {
+  if (!v) {
     chunk->free_list += 1;
   } else {
     // root contains a pointer to the next free slot inside `roots`
-    chunk->free_list = (slot *)value;
+    chunk->free_list = (slot *)v;
   }
 
-  return (boxroot)root;
+  return (value *)root;
 }
 
-static void free_boxroot(boxroot root) {
+static void free_boxroot(value *root)
+{
   slot *v = (slot *)root;
   chunk *chunk = GET_CHUNK_HEADER(v);
 
@@ -119,14 +134,17 @@ static void free_boxroot(boxroot root) {
   chunk->free_list = (slot)v;
   chunk->free_count += 1;
 
-  // If this is not the "head" chunk link and none of the roots are being
-  // used, we can free it.
-  if (chunk->free_count == CHUNK_ROOTS_CAPACITY && chunk->prev) {
+  // If none of the roots are being used, and it is not the last pool,
+  // we can free it.
+  if (chunk->free_count == CHUNK_ROOTS_CAPACITY && chunk->next != chunk) {
     chunk->prev->next = chunk->next;
-    if (chunk->next) {
-      chunk->next->prev = chunk->prev;
-    }
+    chunk->next->prev = chunk->prev;
+    if (old_chunks == chunk) old_chunks = chunk->next;
+    if (young_chunks == chunk) young_chunks = chunk->next;
     free(chunk);
+    // TODO: do not free immediately, keep a few empty pools aside (or
+    // trust that the allocator does it, unlikely for such large
+    // allocations).
   }
 }
 
@@ -134,66 +152,159 @@ static void free_boxroot(boxroot root) {
 
 static void (*fast_boxroot_prev_scan_roots_hook)(scanning_action);
 
-// Returns true if null or allocated, returns false if non-allocated
-// or possibly an immediate that happens to have the same msbs as
-// header.
-#define IS_ALLOCATED_OR_NULL(header, value) (header != GET_CHUNK_HEADER(value))
+static int is_minor_scanning(scanning_action action)
+{
+  return action == &caml_oldify_one;
+}
 
-static void fast_boxroot_scan_roots(scanning_action action) {
-  chunk *chunk = NULL;
-  int i = 0;
-
-  for (chunk = fast_boxroot_chunks; chunk; chunk = chunk->next) {
-
-    for (i = 0; i < CHUNK_ROOTS_CAPACITY; ++i) {
-      slot *r = &chunk->roots[i];
-      slot v = *r;
-      if (!v) {
-        // We can skip the rest if the pointer value is NULL
-        break;
-      }
-      if (IS_ALLOCATED_OR_NULL(chunk, v)) {
-        (*action)((value)v, (value *)r);
-      }
+static void scan_chunk(scanning_action action, chunk * chunk)
+{
+  for (int i = 0; i < CHUNK_ROOTS_CAPACITY; ++i) {
+    slot v = chunk->roots[i];
+    if (!v) {
+      // We can skip the rest if the pointer value is NULL
+      break;
+    }
+    if (chunk != GET_CHUNK_HEADER(v)) {
+      // The value is an OCaml block
+      (*action)((value)v, (value *) &chunk->roots[i]);
     }
   }
+}
 
+static void scan_chunks(scanning_action action, chunk * start_chunk)
+{
+  if (!start_chunk) return;
+  scan_chunk(action, start_chunk);
+  for (chunk *chunk = start_chunk->next; chunk != start_chunk; chunk = chunk->next) {
+    scan_chunk(action, chunk);
+  }
+}
+
+static void scan_for_minor(scanning_action action)
+{
+  if (!young_chunks) return;
+  scan_chunks(action, young_chunks);
+  // promote minor chunks
+  if (!old_chunks) {
+    old_chunks = young_chunks;
+  } else {
+    chunk * last = old_chunks->prev;
+    last->next = young_chunks;
+    young_chunks->prev->next = old_chunks;
+    old_chunks->prev = young_chunks->prev;
+    young_chunks->prev = last;
+    old_chunks = young_chunks;
+  }
+  young_chunks = alloc_chunk();//TODO: init lazily
+}
+
+static void scan_for_major(scanning_action action)
+{
+  scan_chunks(action, young_chunks);
+  scan_chunks(action, old_chunks);
+}
+
+static void fast_boxroot_scan_roots(scanning_action action)
+{
+  if (is_minor_scanning(action)) {
+    scan_for_minor(action);
+  } else {
+    scan_for_major(action);
+  }
   if (fast_boxroot_prev_scan_roots_hook) {
     (*fast_boxroot_prev_scan_roots_hook)(action);
   }
 }
 
 // Must be called to set the hook
-void fast_boxroot_scan_hook_setup() {
+void fast_boxroot_scan_hook_setup()
+{
   fast_boxroot_prev_scan_roots_hook = caml_scan_roots_hook;
   caml_scan_roots_hook = fast_boxroot_scan_roots;
+  young_chunks = alloc_chunk();
+  old_chunks = alloc_chunk();
 }
 
-void fast_boxroot_scan_hook_teardown() {
+void fast_boxroot_scan_hook_teardown()
+{
   caml_scan_roots_hook = fast_boxroot_prev_scan_roots_hook;
   fast_boxroot_prev_scan_roots_hook = NULL;
+  //TODO: free all chunks
 }
 
 // Boxroot API implementation
 
-boxroot fast_boxroot_create(value init) {
-  boxroot r = alloc_boxroot();
-  *(value *)r = init;
-  return r;
+static class classify_root(value v)
+{
+  if(!Is_block(v)) return UNTRACKED;
+  if(Is_young(v)) return YOUNG;
+/*#ifndef NO_NAKED_POINTERS
+  if(!Is_in_heap(v)) return UNTRACKED;
+#endif*/
+  return OLD;
 }
 
-value const *fast_boxroot_get(boxroot root) {
+static inline boxroot boxroot_create(value init, class class)
+{
+  value *cell;
+  switch (class) {
+  case UNTRACKED:
+    cell = (value *) malloc(sizeof(value));
+    break;
+  default:
+    cell = alloc_boxroot(class);
+  }
+  if (cell) *cell = init;
+  return (boxroot)cell;
+}
+
+boxroot fast_boxroot_create(value init)
+{
+  return boxroot_create(init, classify_root(init));
+}
+
+static inline value * boxroot_get(boxroot root)
+{
+  return (value *)root;
+}
+
+value const * fast_boxroot_get(boxroot root)
+{
   CAMLassert(root);
-  return (value const *)root;
+  return boxroot_get(root);
 }
 
-void fast_boxroot_delete(boxroot root) {
+static inline void boxroot_delete(boxroot root, class class)
+{
+  value *cell = boxroot_get(root);
+  switch (class) {
+  case UNTRACKED:
+    free(cell);
+    break;
+  default:
+    free_boxroot(cell);
+  }
+}
+
+void fast_boxroot_delete(boxroot root)
+{
   CAMLassert(root);
-  free_boxroot(root);
+  boxroot_delete(root, classify_root(*boxroot_get(root)));
 }
 
-void fast_boxroot_modify(boxroot *root, value new_value) {
-  value *v = (value *)*root;
-  CAMLassert(v);
-  *v = new_value;
+void fast_boxroot_modify(boxroot *root, value new_value)
+{
+  value *old_root = boxroot_get(*root);
+  class old_class = classify_root(*old_root);
+  class new_class = classify_root(new_value);
+
+  if (old_class == new_class) {
+    *old_root = new_value;
+    return;
+  }
+
+  boxroot_delete(*root, old_class);
+  *root = boxroot_create(new_value, new_class);
+  // In Rust: panic here if [*root == NULL]
 }
