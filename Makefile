@@ -8,9 +8,10 @@ CHOICE_MODULES = \
   fake_boxroot.o choice_fake_boxroots_stubs.o choice_fake_boxroots.cmx \
   boxroot/boxroot.o choice_boxroots_stubs.o choice_boxroots.cmx
 
-perm_count: $(CHOICE_MODULES) perm_count.ml
+perm_count: $(CHOICE_MODULES) config.ml perm_count.ml
+	ocamlopt -g -c config.ml
 	ocamlopt -g -c perm_count.ml
-	ocamlopt -g -o $@ $(CHOICE_MODULES) perm_count.cmx
+	ocamlopt -g -o $@ $(CHOICE_MODULES) config.cmx perm_count.cmx
 
 include Makefile.common
 
@@ -35,5 +36,5 @@ IMPLEMENTATIONS=\
 .PHONY: bench
 bench: perm_count
 	export NITER=10 $(foreach IMPLEM, $(IMPLEMENTATIONS), \
-	    && (IMPLEM=$(IMPLEM) time ./perm_count) \
+	    && (echo; IMPLEM=$(IMPLEM) ./perm_count; echo) \
 	)
