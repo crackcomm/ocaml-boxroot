@@ -44,7 +44,7 @@ static chunk *fast_boxroot_chunks = NULL;
 static chunk *alloc_chunk() {
   chunk *out = aligned_alloc(CHUNK_SIZE, CHUNK_SIZE); // TODO: not portable
 
-  if (!out) {
+  if (out == NULL) {
     exit(1); // TODO: message or proper handling
   }
 
@@ -69,7 +69,7 @@ static chunk *get_available_chunk() {
       // next_chunk->next point to a sequence of full chunks
       if (next_chunk != fast_boxroot_chunks) {
         next_chunk->prev->next = next_chunk->next;
-        if (next_chunk->next) {
+        if (next_chunk->next != NULL) {
           next_chunk->next->prev = next_chunk->prev;
         }
         next_chunk->next = fast_boxroot_chunks;
@@ -85,7 +85,7 @@ static chunk *get_available_chunk() {
   chunk *next = fast_boxroot_chunks;
   fast_boxroot_chunks = alloc_chunk();
   fast_boxroot_chunks->next = next;
-  if (next) {
+  if (next != NULL) {
     next->prev = fast_boxroot_chunks;
   }
 
@@ -101,7 +101,7 @@ static boxroot alloc_boxroot() {
   slot value = *root;
   // root contains either a pointer to the next free slot or NULL
   // if it is NULL we just increase the free_list pointer to the next
-  if (!value) {
+  if (value == NULL) {
     chunk->free_list += 1;
   } else {
     // root contains a pointer to the next free slot inside `roots`
@@ -123,7 +123,7 @@ static void free_boxroot(boxroot root) {
   // used, we can free it.
   if (chunk->free_count == CHUNK_ROOTS_CAPACITY && chunk->prev) {
     chunk->prev->next = chunk->next;
-    if (chunk->next) {
+    if (chunk->next != NULL) {
       chunk->next->prev = chunk->prev;
     }
     free(chunk);
@@ -148,7 +148,7 @@ static void fast_boxroot_scan_roots(scanning_action action) {
     for (i = 0; i < CHUNK_ROOTS_CAPACITY; ++i) {
       slot *r = &chunk->roots[i];
       slot v = *r;
-      if (!v) {
+      if (v == NULL) {
         // We can skip the rest if the pointer value is NULL
         break;
       }
@@ -158,7 +158,7 @@ static void fast_boxroot_scan_roots(scanning_action action) {
     }
   }
 
-  if (fast_boxroot_prev_scan_roots_hook) {
+  if (fast_boxroot_prev_scan_roots_hook != NULL) {
     (*fast_boxroot_prev_scan_roots_hook)(action);
   }
 }
