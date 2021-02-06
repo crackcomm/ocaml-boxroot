@@ -10,21 +10,18 @@ module Config = struct
   ]
 
   let wrong_usage () =
-    Printf.eprintf "Usage: %s [%s] <int>\n%!" Sys.argv.(0) (String.concat "|" (List.map fst choices));
+    Printf.eprintf "Usage: IMPLEM=[%s] NITER=<int> %s\n%!"
+      (String.concat "|" (List.map fst choices))
+      Sys.argv.(0);
     exit 2
 
-  let () =
-    if Array.length Sys.argv < 3 then
-      wrong_usage ()
-
   let choice =
-    match List.assoc_opt Sys.argv.(1) choices with
-    | Some choice -> choice
-    | None -> wrong_usage ()
+    try List.assoc (Sys.getenv "IMPLEM") choices
+    with _ -> wrong_usage ()
 
-  let n = match int_of_string_opt Sys.argv.(2) with
-    | Some n -> n
-    | None -> wrong_usage ()
+  let n =
+    try int_of_string (Sys.getenv "NITER")
+    with _ -> wrong_usage ()
 end
 
 (* this *linear* function consumes the ownership of its argument *)

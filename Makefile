@@ -22,16 +22,17 @@ clean::
 
 .PHONY: bench
 bench: perm_count
-	time ./perm_count ocaml-persistent 10
+	export NITER=10
+	time IMPLEM=ocaml-persistent ./perm_count
 	@echo
-	time ./perm_count ocaml-ephemeral 10
+	time IMPLEM=ocaml-ephemeral ./perm_count
 	@echo
-	time ./perm_count gc 10
+	time IMPLEM=gc ./perm_count
 	@echo
-	time ./perm_count global-roots 10
+	time IMPLEM=global-roots ./perm_count
 	@echo
-	time ./perm_count generational-global-roots 10
+	time IMPLEM=generational-global-roots ./perm_count
 	@echo
-	time ./perm_count fake-boxroots 10
+	time IMPLEM=fake-boxroots ./perm_count
 	@echo
-	time ./perm_count boxroots 10
+	time IMPLEM=boxroots ./perm_count
