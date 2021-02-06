@@ -45,8 +45,10 @@ typedef struct chunk {
 static_assert(sizeof(chunk) <= CHUNK_SIZE, "bad chunk size");
 
 // Rings of chunks
-static chunk *old_chunks = NULL; // Contains only old roots
-static chunk *young_chunks = NULL; // Contains only young roots
+static chunk *old_chunks = NULL; // Contains only roots pointing to
+                                 // the major heap
+static chunk *young_chunks = NULL; // Contains roots pointing to the
+                                   // major or the minor heap
 
 typedef enum class {
   YOUNG,
@@ -373,7 +375,9 @@ void fast_boxroot_modify(boxroot *root, value new_value)
   class old_class = classify_root(*old_root);
   class new_class = classify_root(new_value);
 
-  if (old_class == new_class) {
+  if (old_class == new_class
+      || (old_class == YOUNG && new_class == OLD)) {
+    // No need to reallocate
     *old_root = new_value;
     return;
   }
