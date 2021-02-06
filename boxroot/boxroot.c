@@ -25,30 +25,36 @@ typedef void * slot;
 
 #define CHUNK_LOG_SIZE 12 // 4KB
 #define CHUNK_SIZE (1 << CHUNK_LOG_SIZE)
-#define HEADER_SIZE 4
+#define HEADER_SIZE 5
 #define CHUNK_ROOTS_CAPACITY (CHUNK_SIZE / sizeof(slot) - HEADER_SIZE)
-
-#define GET_CHUNK_HEADER(v)                                                    \
-  ((struct chunk *)((uintptr_t)v & ~((uintptr_t)CHUNK_SIZE - 1)))
+#define LOW_CAPACITY_THRESHOLD 50 // 50% capacity before promoting a
+                                  // young chunk.
 
 typedef struct chunk {
   struct chunk *prev;
   struct chunk *next;
   slot *free_list;
   size_t free_count;
-  // Unoccupied slots are either NULL or a pointer to the next free slot.
-  // Upon initialization, all slots are NULL. Only after a slot has been
-  // "freed" will it contain a pointer to the next free slot.
-  // When a slot is NULL, it can be safely assumed that all slots that
-  // follow are NULL too.
+  // Unoccupied slots are either NULL or a pointer to the next free
+  // slot. The null value acts as a terminator: if a slot is null,
+  // then all subsequent slots are null (bump pointer optimisation).
+  size_t capacity; // Number of non-null slots, updated at the end of
+                   // each scan.
   slot roots[CHUNK_ROOTS_CAPACITY];
 } chunk;
 
 static_assert(sizeof(chunk) <= CHUNK_SIZE, "bad chunk size");
 
+static inline chunk * get_chunk_header(slot v)
+{
+  return (chunk *)((uintptr_t)v & ~((uintptr_t)CHUNK_SIZE - 1));
+}
+
 // Rings of chunks
-static chunk *old_chunks = NULL; // Contains only old roots
-static chunk *young_chunks = NULL; // Contains only young roots
+static chunk *old_chunks = NULL; // Contains only roots pointing to
+                                 // the major heap
+static chunk *young_chunks = NULL; // Contains roots pointing to the
+                                   // major or the minor heap
 
 typedef enum class {
   YOUNG,
@@ -64,7 +70,7 @@ static struct {
   int total_alloced_chunks;
   int live_chunks;
   int peak_chunks;
-} stats = { 0 };
+} stats; // zero-initialized
 
 static chunk * alloc_chunk()
 {
@@ -74,9 +80,7 @@ static chunk * alloc_chunk()
 
   chunk *out = aligned_alloc(CHUNK_SIZE, CHUNK_SIZE); // TODO: not portable
 
-  if (out == NULL) {
-    exit(1); // TODO: message or proper handling
-  }
+  if (out == NULL) return NULL;
 
   out->prev = out->next = out;
   out->free_list = out->roots;
@@ -86,36 +90,69 @@ static chunk * alloc_chunk()
   return out;
 }
 
+// insert [source] in front of [*target]
+static void ring_insert(chunk *source, chunk **target)
+{
+  chunk *old = *target;
+  if (old == NULL) {
+    *target = source;
+  } else {
+    chunk *last = old->prev;
+    last->next = source;
+    source->prev->next = old;
+    old->prev = source->prev;
+    source->prev = last;
+    *target = young_chunks;
+  }
+}
+
+// remove the first element from [*target] and return it
+static chunk *ring_pop(chunk **target)
+{
+  chunk *head = *target;
+  if (head->next == head) {
+    *target = NULL;
+    return head;
+  }
+  head->prev->next = head->next;
+  head->next->prev = head->prev;
+  *target = head->next;
+  head->next = head;
+  head->prev = head;
+  return head;
+}
+
 static chunk * get_available_chunk(class class)
 {
+  // If there was no optimisation for immediates, we could always place
+  // the immediates with the old values (be careful about NULL in
+  // naked-pointers mode, though).
   chunk **chunk_ring = (class == YOUNG) ? &young_chunks : &old_chunks;
   chunk *start_chunk = *chunk_ring;
-  CAMLassert(start_chunk);
+  if (start_chunk) {
+    if (start_chunk->free_count > 0)
+      return start_chunk;
 
-  if (start_chunk->free_count > 0)
-    return start_chunk;
+    chunk *next_chunk = NULL;
 
-  chunk *next_chunk = NULL;
-
-  // Find a chunk with available slots
-  for (next_chunk = start_chunk->next;
-       next_chunk != start_chunk;
-       next_chunk = next_chunk->next) {
-    if (next_chunk->free_count > 0) {
-      // Rotate the ring, making the chunk with free slots the head
-      // TODO: maybe better reordering?
-      *chunk_ring = next_chunk;
-      return next_chunk;
+    // Find a chunk with available slots
+    // TODO: maybe better lookup by putting the more empty chunks in the front
+    // during scanning.
+    for (next_chunk = start_chunk->next;
+         next_chunk != start_chunk;
+         next_chunk = next_chunk->next) {
+      if (next_chunk->free_count > 0) {
+        // Rotate the ring, making the chunk with free slots the head
+        *chunk_ring = next_chunk;
+        return next_chunk;
+      }
     }
   }
 
   // None found, add a new chunk at the start
   chunk *new_chunk = alloc_chunk();
-  new_chunk->next = start_chunk;
-  new_chunk->prev = start_chunk->prev;
-  start_chunk->prev = new_chunk;
-  new_chunk->prev->next = new_chunk;
-  *chunk_ring = new_chunk;
+  if (new_chunk == NULL) return NULL;
+  ring_insert(new_chunk, chunk_ring);
 
   return new_chunk;
 }
@@ -127,8 +164,9 @@ static value * alloc_boxroot(class class)
 {
   CAMLassert(class != UNTRACKED);
   chunk *chunk = get_available_chunk(class);
+  if (chunk == NULL) return NULL;
   // TODO Latency: bound the number of young roots alloced at each
-  // minor collection.
+  // minor collection by scheduling a minor collection.
 
   slot *root = chunk->free_list;
   chunk->free_count -= 1;
@@ -149,20 +187,19 @@ static value * alloc_boxroot(class class)
 static void free_boxroot(value *root)
 {
   slot *v = (slot *)root;
-  chunk *chunk = GET_CHUNK_HEADER(v);
+  chunk *c = get_chunk_header(v);
 
-  *v = chunk->free_list;
-  chunk->free_list = (slot)v;
-  chunk->free_count += 1;
+  *v = c->free_list;
+  c->free_list = (slot)v;
+  c->free_count += 1;
 
   // If none of the roots are being used, and it is not the last pool,
   // we can free it.
-  if (chunk->free_count == CHUNK_ROOTS_CAPACITY && chunk->next != chunk) {
-    chunk->prev->next = chunk->next;
-    chunk->next->prev = chunk->prev;
-    if (old_chunks == chunk) old_chunks = chunk->next;
-    if (young_chunks == chunk) young_chunks = chunk->next;
-    free(chunk);
+  if (c->free_count == CHUNK_ROOTS_CAPACITY && c->next != c) {
+    chunk *hd = ring_pop(&c);
+    if (old_chunks == hd) old_chunks = c;
+    else if (young_chunks == hd) young_chunks = c;
+    free(hd);
     // TODO: do not free immediately, keep a few empty pools aside (or
     // trust that the allocator does it, unlikely for such large
     // allocations).
@@ -184,14 +221,18 @@ static int scan_chunk(scanning_action action, chunk * chunk)
   for (; i < CHUNK_ROOTS_CAPACITY; ++i) {
     slot v = chunk->roots[i];
     if (v == NULL) {
-      // We can skip the rest if the pointer value is NULL
+      // We can skip the rest if the pointer value is NULL.
+      chunk->capacity = i;
       return ++i;
     }
-    if (chunk != GET_CHUNK_HEADER(v)) {
-      // The value is an OCaml block
+    if (get_chunk_header(v) != chunk) {
+      // The value is an OCaml block (or possibly an immediate whose
+      // msbs differ from those of [chunk], if the immediates
+      // optimisation were to be turned off).
       (*action)((value)v, (value *) &chunk->roots[i]);
     }
   }
+  chunk->capacity = i;
   return i;
 }
 
@@ -211,19 +252,15 @@ static void scan_for_minor(scanning_action action)
   ++stats.minor_collections;
   if (young_chunks == NULL) return;
   int work = scan_chunks(action, young_chunks);
-  // promote minor chunks
-  if (old_chunks == NULL) {
-    old_chunks = young_chunks;
-  } else {
-    chunk * last = old_chunks->prev;
-    last->next = young_chunks;
-    young_chunks->prev->next = old_chunks;
-    old_chunks->prev = young_chunks->prev;
-    young_chunks->prev = last;
-    old_chunks = young_chunks;
-  }
-  young_chunks = alloc_chunk();//TODO: init lazily
   stats.total_scanning_work_minor += work;
+  // promote minor chunks
+  chunk *new_young_chunk = NULL;
+  if ((young_chunks->capacity * 100 / CHUNK_ROOTS_CAPACITY) <=
+      LOW_CAPACITY_THRESHOLD)
+    new_young_chunk = ring_pop(&young_chunks);
+  ring_insert(young_chunks, &old_chunks);
+  // allocate the new young chunk lazily
+  young_chunks = new_young_chunk;
 }
 
 static void scan_for_major(scanning_action action)
@@ -284,8 +321,6 @@ void boxroot_scan_hook_setup()
 {
   boxroot_prev_scan_roots_hook = caml_scan_roots_hook;
   caml_scan_roots_hook = boxroot_scan_roots;
-  young_chunks = alloc_chunk();
-  old_chunks = alloc_chunk();
 }
 
 void boxroot_scan_hook_teardown()
@@ -302,9 +337,9 @@ static class classify_value(value v)
 {
   if(!Is_block(v)) return UNTRACKED;
   if(Is_young(v)) return YOUNG;
-/*#ifndef NO_NAKED_POINTERS
+#ifndef NO_NAKED_POINTERS
   if(!Is_in_heap(v)) return UNTRACKED;
-#endif*/
+#endif
   return OLD;
 }
 
@@ -318,7 +353,11 @@ static inline boxroot boxroot_create_classified(value init, class class)
   value *cell;
   switch (class) {
   case UNTRACKED:
+    // [init] can be null in naked-pointers mode, handled here.
     cell = (value *) malloc(sizeof(value));
+    // TODO: further optim: use a global table instead of malloc for
+    // very small values of [init] — for fast variants and and to
+    // handle C-side NULLs in no-naked-pointers mode if desired.
     break;
   default:
     cell = alloc_boxroot(class);
@@ -362,7 +401,9 @@ void boxroot_modify(boxroot *root, value new_value)
   class old_class = classify_boxroot(*root);
   class new_class = classify_value(new_value);
 
-  if (old_class == new_class) {
+  if (old_class == new_class
+      || (old_class == YOUNG && new_class == OLD)) {
+    // No need to reallocate
     value *cell = (value *)*root;
     *cell = new_value;
     return;
@@ -370,5 +411,6 @@ void boxroot_modify(boxroot *root, value new_value)
 
   boxroot_delete_classified(*root, old_class);
   *root = boxroot_create_classified(new_value, new_class);
-  // In Rust: panic here if [*root == NULL]
+  // Note: *root can be NULL, which must be checked (in Rust, check
+  // and panic here).
 }

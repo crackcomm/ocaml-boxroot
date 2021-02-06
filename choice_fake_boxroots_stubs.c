@@ -13,6 +13,11 @@
 #include "linked_list.h"
 #include "fake_boxroot.h"
 
+// TODO @gasche: boxroot logic should be moved eventually to its own
+// subdirectory, so that it would be easier to locate (and split in
+// several files if we want to, etc.) than lost in the middle of my
+// over-engineering modular benchmarks.
+
 static value node_val_get(struct node *node) {
     return *(fake_boxroot_get((fake_boxroot) node->hd));
 }
