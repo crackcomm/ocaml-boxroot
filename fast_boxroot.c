@@ -77,9 +77,7 @@ static chunk * alloc_chunk()
 
   chunk *out = aligned_alloc(CHUNK_SIZE, CHUNK_SIZE); // TODO: not portable
 
-  if (out == NULL) {
-    exit(1); // TODO: message or proper handling
-  }
+  if (out == NULL) return NULL;
 
   out->prev = out->next = out;
   out->free_list = out->roots;
@@ -110,31 +108,33 @@ static chunk * get_available_chunk(class class)
   // with the old values.
   chunk **chunk_ring = (class == YOUNG) ? &young_chunks : &old_chunks;
   chunk *start_chunk = *chunk_ring;
-  CAMLassert(start_chunk);
+  if (start_chunk) {
+    if (start_chunk->free_count > 0)
+      return start_chunk;
 
-  if (start_chunk->free_count > 0)
-    return start_chunk;
+    chunk *next_chunk = NULL;
 
-  chunk *next_chunk = NULL;
-
-  // Find a chunk with available slots
-  for (next_chunk = start_chunk->next;
-       next_chunk != start_chunk;
-       next_chunk = next_chunk->next) {
-    if (next_chunk->free_count > 0) {
-      // Rotate the ring, making the chunk with free slots the head
-      // TODO: maybe better reordering? @gasche: A natural reordering
-      // would be to move all the full chunks that were traversed to
-      // the end of the chunk list. But this requires a chunk-list
-      // structure that knows about both the first and the last
-      // elements.
-      *chunk_ring = next_chunk;
-      return next_chunk;
+    // Find a chunk with available slots
+    for (next_chunk = start_chunk->next;
+         next_chunk != start_chunk;
+         next_chunk = next_chunk->next) {
+      if (next_chunk->free_count > 0) {
+        // Rotate the ring, making the chunk with free slots the head
+        // TODO: maybe better reordering? @gasche: A natural reordering
+        // would be to move all the full chunks that were traversed to
+        // the end of the chunk list. But this requires a chunk-list
+        // structure that knows about both the first and the last
+        // elements.
+        *chunk_ring = next_chunk;
+        return next_chunk;
+      }
     }
   }
 
   // None found, add a new chunk at the start
-  ring_insert(alloc_chunk(), chunk_ring);
+  chunk *new_chunk = alloc_chunk();
+  if (new_chunk == NULL) return NULL;
+  ring_insert(new_chunk, chunk_ring);
 
   return new_chunk;
 }
@@ -146,6 +146,7 @@ static value * alloc_boxroot(class class)
 {
   CAMLassert(class != UNTRACKED);
   chunk *chunk = get_available_chunk(class);
+  if (chunk == NULL) return NULL;
   // TODO Latency: bound the number of young roots alloced at each
   // minor collection by scheduling a minor collection.
 
@@ -234,7 +235,7 @@ static void scan_for_minor(scanning_action action)
   int work = scan_chunks(action, young_chunks);
   // promote minor chunks
   ring_insert(young_chunks, &old_chunks);
-  young_chunks = alloc_chunk();//TODO: init lazily
+  young_chunks = NULL;
   stats.total_scanning_work_minor += work;
 }
 
@@ -296,8 +297,6 @@ void fast_boxroot_scan_hook_setup()
 {
   fast_boxroot_prev_scan_roots_hook = caml_scan_roots_hook;
   caml_scan_roots_hook = fast_boxroot_scan_roots;
-  young_chunks = alloc_chunk();
-  old_chunks = alloc_chunk();
 }
 
 void fast_boxroot_scan_hook_teardown()
@@ -391,5 +390,6 @@ void fast_boxroot_modify(boxroot *root, value new_value)
 
   boxroot_delete(*root, old_class);
   *root = boxroot_create(new_value, new_class);
-  // In Rust: panic here if [*root == NULL]
+  // Note: *root can be NULL, which must be checked (in Rust, check
+  // and panic here).
 }
