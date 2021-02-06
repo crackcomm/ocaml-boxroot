@@ -253,10 +253,16 @@ static int mib_of_chunks(int count)
   if (log_per_chunk < 0) return count >> -log_per_chunk;
 }
 
+static int average(int total_work, int nb_collections) {
+    if (nb_collections <= 0)
+        return -1;
+    return (total_work / nb_collections);
+}
+
 static void print_stats()
 {
-  int scanning_work_minor = stats.total_scanning_work_minor / stats.minor_collections;
-  int scanning_work_major = stats.total_scanning_work_major / stats.major_collections;
+  int scanning_work_minor = average(stats.total_scanning_work_minor, stats.minor_collections);
+  int scanning_work_major = average(stats.total_scanning_work_major, stats.major_collections);
   int total_mib = mib_of_chunks(stats.total_alloced_chunks);
   int peak_mib = mib_of_chunks(stats.peak_chunks);
   printf("minor collections: %d\n"
