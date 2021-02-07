@@ -21,16 +21,14 @@ static void *aligned_alloc(size_t alignment, size_t size) {
 
 static const int do_print_stats = 1;
 
-typedef void * slot;
-
 #define CHUNK_LOG_SIZE 12 // 4KB
 #define CHUNK_SIZE (1 << CHUNK_LOG_SIZE)
-#define HEADER_SIZE 5
-#define CHUNK_ROOTS_CAPACITY (CHUNK_SIZE / sizeof(slot) - HEADER_SIZE)
 #define LOW_CAPACITY_THRESHOLD 50 // 50% capacity before promoting a
                                   // young chunk.
 
-typedef struct chunk {
+typedef void * slot;
+
+struct header {
   struct chunk *prev;
   struct chunk *next;
   slot *free_list;
@@ -40,10 +38,16 @@ typedef struct chunk {
   // then all subsequent slots are null (bump pointer optimisation).
   size_t capacity; // Number of non-null slots, updated at the end of
                    // each scan.
+};
+
+#define CHUNK_ROOTS_CAPACITY ((CHUNK_SIZE - sizeof(struct header)) / sizeof(slot))
+
+typedef struct chunk {
+  struct header hd;
   slot roots[CHUNK_ROOTS_CAPACITY];
 } chunk;
 
-static_assert(sizeof(chunk) <= CHUNK_SIZE, "bad chunk size");
+static_assert(sizeof(chunk) == CHUNK_SIZE, "bad chunk size");
 
 static inline chunk * get_chunk_header(slot v)
 {
@@ -82,9 +86,9 @@ static chunk * alloc_chunk()
 
   if (out == NULL) return NULL;
 
-  out->prev = out->next = out;
-  out->free_list = out->roots;
-  out->free_count = CHUNK_ROOTS_CAPACITY;
+  out->hd.prev = out->hd.next = out;
+  out->hd.free_list = out->roots;
+  out->hd.free_count = CHUNK_ROOTS_CAPACITY;
   memset(out->roots, 0, sizeof(out->roots));
 
   return out;
@@ -97,11 +101,11 @@ static void ring_insert(chunk *source, chunk **target)
   if (old == NULL) {
     *target = source;
   } else {
-    chunk *last = old->prev;
-    last->next = source;
-    source->prev->next = old;
-    old->prev = source->prev;
-    source->prev = last;
+    chunk *last = old->hd.prev;
+    last->hd.next = source;
+    source->hd.prev->hd.next = old;
+    old->hd.prev = source->hd.prev;
+    source->hd.prev = last;
     *target = young_chunks;
   }
 }
@@ -109,17 +113,17 @@ static void ring_insert(chunk *source, chunk **target)
 // remove the first element from [*target] and return it
 static chunk *ring_pop(chunk **target)
 {
-  chunk *head = *target;
-  if (head->next == head) {
+  chunk *front = *target;
+  if (front->hd.next == front) {
     *target = NULL;
-    return head;
+    return front;
   }
-  head->prev->next = head->next;
-  head->next->prev = head->prev;
-  *target = head->next;
-  head->next = head;
-  head->prev = head;
-  return head;
+  front->hd.prev->hd.next = front->hd.next;
+  front->hd.next->hd.prev = front->hd.prev;
+  *target = front->hd.next;
+  front->hd.next = front;
+  front->hd.prev = front;
+  return front;
 }
 
 static chunk * get_available_chunk(class class)
@@ -130,7 +134,7 @@ static chunk * get_available_chunk(class class)
   chunk **chunk_ring = (class == YOUNG) ? &young_chunks : &old_chunks;
   chunk *start_chunk = *chunk_ring;
   if (start_chunk) {
-    if (start_chunk->free_count > 0)
+    if (start_chunk->hd.free_count > 0)
       return start_chunk;
 
     chunk *next_chunk = NULL;
@@ -138,10 +142,10 @@ static chunk * get_available_chunk(class class)
     // Find a chunk with available slots
     // TODO: maybe better lookup by putting the more empty chunks in the front
     // during scanning.
-    for (next_chunk = start_chunk->next;
+    for (next_chunk = start_chunk->hd.next;
          next_chunk != start_chunk;
-         next_chunk = next_chunk->next) {
-      if (next_chunk->free_count > 0) {
+         next_chunk = next_chunk->hd.next) {
+      if (next_chunk->hd.free_count > 0) {
         // Rotate the ring, making the chunk with free slots the head
         *chunk_ring = next_chunk;
         return next_chunk;
@@ -168,17 +172,17 @@ static value * alloc_boxroot(class class)
   // TODO Latency: bound the number of young roots alloced at each
   // minor collection by scheduling a minor collection.
 
-  slot *root = chunk->free_list;
-  chunk->free_count -= 1;
+  slot *root = chunk->hd.free_list;
+  chunk->hd.free_count--;
 
   slot v = *root;
   // root contains either a pointer to the next free slot or NULL
   // if it is NULL we just increase the free_list pointer to the next
   if (v == NULL) {
-    chunk->free_list += 1;
+    chunk->hd.free_list++;
   } else {
     // root contains a pointer to the next free slot inside `roots`
-    chunk->free_list = (slot *)v;
+    chunk->hd.free_list = (slot *)v;
   }
 
   return (value *)root;
@@ -189,13 +193,13 @@ static void free_boxroot(value *root)
   slot *v = (slot *)root;
   chunk *c = get_chunk_header(v);
 
-  *v = c->free_list;
-  c->free_list = (slot)v;
-  c->free_count += 1;
+  *v = c->hd.free_list;
+  c->hd.free_list = (slot)v;
+  c->hd.free_count++;
 
   // If none of the roots are being used, and it is not the last pool,
   // we can free it.
-  if (c->free_count == CHUNK_ROOTS_CAPACITY && c->next != c) {
+  if (c->hd.free_count == CHUNK_ROOTS_CAPACITY && c->hd.next != c) {
     chunk *hd = ring_pop(&c);
     if (old_chunks == hd) old_chunks = c;
     else if (young_chunks == hd) young_chunks = c;
@@ -222,7 +226,7 @@ static int scan_chunk(scanning_action action, chunk * chunk)
     slot v = chunk->roots[i];
     if (v == NULL) {
       // We can skip the rest if the pointer value is NULL.
-      chunk->capacity = i;
+      chunk->hd.capacity = i;
       return ++i;
     }
     if (get_chunk_header(v) != chunk) {
@@ -232,7 +236,7 @@ static int scan_chunk(scanning_action action, chunk * chunk)
       (*action)((value)v, (value *) &chunk->roots[i]);
     }
   }
-  chunk->capacity = i;
+  chunk->hd.capacity = i;
   return i;
 }
 
@@ -241,7 +245,9 @@ static int scan_chunks(scanning_action action, chunk * start_chunk)
   int work = 0;
   if (start_chunk == NULL) return work;
   work += scan_chunk(action, start_chunk);
-  for (chunk *chunk = start_chunk->next; chunk != start_chunk; chunk = chunk->next) {
+  for (chunk *chunk = start_chunk->hd.next;
+       chunk != start_chunk;
+       chunk = chunk->hd.next) {
     work += scan_chunk(action, chunk);
   }
   return work;
@@ -255,7 +261,7 @@ static void scan_for_minor(scanning_action action)
   stats.total_scanning_work_minor += work;
   // promote minor chunks
   chunk *new_young_chunk = NULL;
-  if ((young_chunks->capacity * 100 / CHUNK_ROOTS_CAPACITY) <=
+  if ((young_chunks->hd.capacity * 100 / CHUNK_ROOTS_CAPACITY) <=
       LOW_CAPACITY_THRESHOLD) {
     new_young_chunk = ring_pop(&young_chunks);
   }
