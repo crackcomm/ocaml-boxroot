@@ -76,7 +76,7 @@ show-deps:
 
 %.exe: $(BOXROOT_LIB) $(CHOICE_MODULES) %.cmx
 	@mkdir -p $(shell dirname ./$@)
-	ocamlopt $(INCLUDE_LIB_DIRS) -g -o $@ $^
+	ocamlopt -runtime-variant i $(INCLUDE_LIB_DIRS) -g -o $@ $^
 # see http://www.gnu.org/software/make/manual/html_node/Chained-Rules.html
 .SECONDARY: $(BOXROOT_LIB) $(CHOICE_MODULES)
 .PRECIOUS: %.cmx

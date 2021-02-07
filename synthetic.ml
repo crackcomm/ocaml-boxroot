@@ -140,6 +140,10 @@ let run () =
     let large_roots = Dll.empty () in
     let values = Dll.empty () in
 
+    let delete_root choice =
+      Choice.run choice ignore
+    in
+
     for _minor_generations = 1 to 1 lsl Config.n do
       let small_count = ref 0 in
       let large_count = ref 0 in
@@ -163,6 +167,7 @@ let run () =
         incr small_count;
         if within small_root_promotion_rate
         then Dll.push small_roots root
+        else delete_root root
       in
       let allocate_large_root () =
         let value = Array.make 512 !large_count in
@@ -170,6 +175,7 @@ let run () =
         incr large_count;
         if within large_root_promotion_rate
         then Dll.push large_roots root
+        else delete_root root
       in
       let allocate_value () =
         let value = Some !small_roots in
@@ -187,17 +193,26 @@ let run () =
       best_small_count := max !best_small_count !small_count;
       best_large_count := max !best_large_count !large_count;
 
-      Dll.filter_inplace small_roots (fun _ ->
-        within root_survival_rate);
+      Dll.filter_inplace small_roots (fun root ->
+        within root_survival_rate
+        || (delete_root root; false));
 
-      Dll.filter_inplace large_roots (fun _ ->
-        within root_survival_rate);
+      Dll.filter_inplace large_roots (fun root ->
+        within root_survival_rate
+        || (delete_root root; false));
 
       Dll.filter_inplace values (fun _ ->
         within gc_survival_rate);
 
-    done
+    done;
+
+    (* end of the round: delete all remaining roots *)
+    Dll.filter_inplace small_roots (fun root ->
+      delete_root root; false);
+    Dll.filter_inplace large_roots (fun root ->
+      delete_root root; false);
   done;
+
   if !best_small_count < small_roots_per_minor then
     Printf.eprintf
       "Warning: we were not able to reach the SMALL_BOXROOTS target (%d),
