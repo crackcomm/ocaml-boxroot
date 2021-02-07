@@ -361,12 +361,24 @@ value boxroot_scan_hook_setup(value unit)
   return Val_unit;
 }
 
+static void force_free_pools(pool *start)
+{
+  if (start == NULL) return;
+  pool *p = start;
+  do {
+    pool *next = p->hd.next;
+    free(p);
+    p = next;
+  } while (p != start);
+}
+
 value boxroot_scan_hook_teardown(value unit)
 {
   caml_scan_roots_hook = boxroot_prev_scan_roots_hook;
   boxroot_prev_scan_roots_hook = NULL;
   if (do_print_stats) print_stats();
-  //TODO: free all pools
+  force_free_pools(young_pools);
+  force_free_pools(old_pools);
   return Val_unit;
 }
 
