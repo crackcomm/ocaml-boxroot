@@ -49,6 +49,7 @@ typedef struct pool {
 
 static_assert(sizeof(pool) == POOL_SIZE, "bad pool size");
 
+// hot path
 static inline pool * get_pool_header(slot v)
 {
   return (pool *)((uintptr_t)v & ~((uintptr_t)POOL_SIZE - 1));
@@ -72,6 +73,7 @@ static struct {
   int total_scanning_work_minor;
   int total_scanning_work_major;
   int total_alloced_pools;
+  int total_freed_pools;
   int live_pools;
   int peak_pools;
 } stats; // zero-initialized
@@ -98,6 +100,7 @@ static pool * alloc_pool()
 // insert [source] in front of [*target]
 static void ring_insert(pool *source, pool **target)
 {
+  if (source == NULL) return;
   pool *old = *target;
   if (old == NULL) {
     *target = source;
@@ -112,7 +115,7 @@ static void ring_insert(pool *source, pool **target)
 }
 
 // remove the first element from [*target] and return it
-static pool *ring_pop(pool **target)
+static pool * ring_pop(pool **target)
 {
   pool *front = *target;
   if (front->hd.next == front) {
@@ -127,6 +130,9 @@ static pool *ring_pop(pool **target)
   return front;
 }
 
+// Find an available pool for the class; place it in front of the ring
+// and return it. Return NULL if none was found and the allocation of
+// a new one failed.
 static pool * get_available_pool(class class)
 {
   // If there was no optimisation for immediates, we could always place
@@ -134,16 +140,15 @@ static pool * get_available_pool(class class)
   // naked-pointers mode, though).
   pool **pool_ring = (class == YOUNG) ? &young_pools : &old_pools;
   pool *start_pool = *pool_ring;
-  if (start_pool) {
-    if (start_pool->hd.free_count > 0)
-      return start_pool;
 
-    pool *next_pool = NULL;
+  if (start_pool != NULL) {
+    CAMLassert(start_pool->hd.free_count == 0);
 
-    // Find a pool with available slots
-    // TODO: maybe better lookup by putting the more empty pools in the front
-    // during scanning.
-    for (next_pool = start_pool->hd.next;
+    // Find a pool with available slots. TODO: maybe faster lookup by
+    // putting the more empty pools in the front during scanning, and/or
+    // temporarily place full ones in an auxiliary ring (until next
+    // scan).
+    for (pool *next_pool = start_pool->hd.next;
          next_pool != start_pool;
          next_pool = next_pool->hd.next) {
       if (next_pool->hd.free_count > 0) {
@@ -162,52 +167,68 @@ static pool * get_available_pool(class class)
   return new_pool;
 }
 
+// Free a pool if empty and not the last of its ring.
+static void try_free_pool(pool *p)
+{
+  if (p->hd.free_count != POOL_ROOTS_CAPACITY || p->hd.next == p) return;
+
+  pool *hd = ring_pop(&p);
+  if (old_pools == hd) old_pools = p;
+  else if (young_pools == hd) young_pools = p;
+  free(hd);
+  stats.total_freed_pools++;
+}
 
 // Allocation, deallocation
 
-static value * alloc_boxroot(class class)
+// hot path
+static inline value * freelist_pop(pool *p)
 {
-  CAMLassert(class != UNTRACKED);
-  pool *pool = get_available_pool(class);
-  if (pool == NULL) return NULL;
-  // TODO Latency: bound the number of young roots alloced at each
-  // minor collection by scheduling a minor collection.
+  slot *new_root = p->hd.free_list;
+  slot next = *new_root;
+  p->hd.free_count--;
 
-  slot *root = pool->hd.free_list;
-  pool->hd.free_count--;
-
-  slot v = *root;
-  // root contains either a pointer to the next free slot or NULL
-  // if it is NULL we just increase the free_list pointer to the next
-  if (v == NULL) {
-    pool->hd.free_list++;
-  } else {
-    // root contains a pointer to the next free slot inside `roots`
-    pool->hd.free_list = (slot *)v;
-  }
-
-  return (value *)root;
+  // [new_root] contains either a pointer to the next free slot or
+  // NULL. If it is NULL, the next free slot is adjacent to the
+  // current one.
+  p->hd.free_list = (next == NULL) ? new_root+1 : (slot *)next;
+  return (value *)new_root;
 }
 
-static void free_boxroot(value *root)
+// slow path: Place an available pool in front of the ring and
+// allocate from it.
+static value * alloc_boxroot_slow(class class)
 {
-  slot *v = (slot *)root;
-  pool *c = get_pool_header(v);
+  CAMLassert(class != UNTRACKED);
+  pool *p = get_available_pool(class);
+  if (p == NULL) return NULL;
+  CAMLassert(pool_is_available(p));
+  return freelist_pop(p);
+}
 
-  *v = c->hd.free_list;
-  c->hd.free_list = (slot)v;
-  c->hd.free_count++;
+// hot path
+static inline value * alloc_boxroot(class class)
+{
+  // TODO Latency: bound the number of young roots alloced at each
+  // minor collection by scheduling a minor collection.
+  pool *p = (class == YOUNG) ? young_pools : old_pools;
+  // Test for NULL is necessary here: it is not always possible to
+  // allocate the first pool elsewhere, e.g. in scanning functions
+  // which must not fail.
+  if (p != NULL && p->hd.free_count != 0) {
+    return freelist_pop(p);
+  }
+  return alloc_boxroot_slow(class);
+}
 
-  // If none of the roots are being used, and it is not the last pool,
-  // we can free it.
-  if (c->hd.free_count == POOL_ROOTS_CAPACITY && c->hd.next != c) {
-    pool *hd = ring_pop(&c);
-    if (old_pools == hd) old_pools = c;
-    else if (young_pools == hd) young_pools = c;
-    free(hd);
-    // TODO: do not free immediately, keep a few empty pools aside (or
-    // trust that the allocator does it, unlikely for such large
-    // allocations).
+// hot path
+static inline void free_boxroot(value *root)
+{
+  pool *p = get_pool_header((slot)root);
+  *(slot *)root = p->hd.free_list;
+  p->hd.free_list = (slot)root;
+  if (++p->hd.free_count == POOL_ROOTS_CAPACITY) {
+    try_free_pool(p);
   }
 }
 
@@ -227,8 +248,7 @@ static int scan_pool(scanning_action action, pool * pool)
     slot v = pool->roots[i];
     if (v == NULL) {
       // We can skip the rest if the pointer value is NULL.
-      pool->hd.capacity = i;
-      return ++i;
+      break;
     }
     if (get_pool_header(v) != pool) {
       // The value is an OCaml block (or possibly an immediate whose
@@ -241,7 +261,7 @@ static int scan_pool(scanning_action action, pool * pool)
   return i;
 }
 
-static int scan_pools(scanning_action action, pool * start_pool)
+static int scan_pools(scanning_action action, pool *start_pool)
 {
   int work = 0;
   if (start_pool == NULL) return work;
@@ -331,47 +351,50 @@ static void print_stats()
 }
 
 // Must be called to set the hook
-void boxroot_scan_hook_setup()
+value boxroot_scan_hook_setup(value unit)
 {
   boxroot_prev_scan_roots_hook = caml_scan_roots_hook;
   caml_scan_roots_hook = boxroot_scan_roots;
+  return Val_unit;
 }
 
-void boxroot_scan_hook_teardown()
+value boxroot_scan_hook_teardown(value unit)
 {
   caml_scan_roots_hook = boxroot_prev_scan_roots_hook;
   boxroot_prev_scan_roots_hook = NULL;
   if (do_print_stats) print_stats();
   //TODO: free all pools
+  return Val_unit;
 }
 
 // Boxroot API implementation
 
-static class classify_value(value v)
+// hot path
+static inline class classify_value(value v)
 {
   if(v == NULL || !Is_block(v)) return UNTRACKED;
   if(Is_young(v)) return YOUNG;
   return OLD;
 }
 
-static class classify_boxroot(boxroot root)
+// hot path
+static inline class classify_boxroot(boxroot root)
 {
     return classify_value(*(value *)root);
 }
 
+// hot path
 static inline boxroot boxroot_create_classified(value init, class class)
 {
   value *cell;
-  switch (class) {
-  case UNTRACKED:
+  if (class != UNTRACKED) {
+    cell = alloc_boxroot(class);
+  } else {
     // [init] can be null in naked-pointers mode, handled here.
     cell = (value *) malloc(sizeof(value));
     // TODO: further optim: use a global table instead of malloc for
     // very small values of [init] — for fast variants and and to
     // handle C-side NULLs in no-naked-pointers mode if desired.
-    break;
-  default:
-    cell = alloc_boxroot(class);
   }
   if (cell != NULL) *cell = init;
   return (boxroot)cell;
@@ -388,15 +411,14 @@ value const * boxroot_get(boxroot root)
   return (value *)root;
 }
 
+// hot path
 static inline void boxroot_delete_classified(boxroot root, class class)
 {
   value *cell = (value *)root;
-  switch (class) {
-  case UNTRACKED:
-    free(cell);
-    break;
-  default:
+  if (class != UNTRACKED) {
     free_boxroot(cell);
+  } else {
+    free(cell);
   }
 }
 
