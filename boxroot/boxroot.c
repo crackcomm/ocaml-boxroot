@@ -89,6 +89,7 @@ static pool * alloc_pool()
   out->hd.prev = out->hd.next = out;
   out->hd.free_list = out->roots;
   out->hd.free_count = POOL_ROOTS_CAPACITY;
+  out->hd.capacity = 0;
   memset(out->roots, 0, sizeof(out->roots));
 
   return out;
