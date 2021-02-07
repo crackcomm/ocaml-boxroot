@@ -333,6 +333,7 @@ static void print_stats()
   int scanning_work_minor = average(stats.total_scanning_work_minor, stats.minor_collections);
   int scanning_work_major = average(stats.total_scanning_work_major, stats.major_collections);
   int total_mib = mib_of_pools(stats.total_alloced_pools);
+  int freed_mib = mib_of_pools(stats.total_freed_pools);
   int peak_mib = mib_of_pools(stats.peak_pools);
 
   if (scanning_work_minor == 0
@@ -343,10 +344,12 @@ static void print_stats()
   printf("work per minor: %d\n"
          "work per major: %d\n"
          "total allocated pools: %d (%d MiB)\n"
+         "total freed pools: %d (%d MiB)\n"
          "peak allocated pools: %d (%d MiB)\n",
          scanning_work_minor,
          scanning_work_major,
          stats.total_alloced_pools, total_mib,
+         stats.total_freed_pools, freed_mib,
          stats.peak_pools, peak_mib);
 }
 
