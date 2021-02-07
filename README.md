@@ -28,7 +28,7 @@ Currently we have implemented:
 ## Some numbers on my machine
 
 ```
-$ make bench
+$ make run
 ---
 ocaml-persistent: 1.96s
 count: 3628800
