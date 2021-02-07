@@ -93,6 +93,7 @@ static struct {
   int total_freed_pools;
   int live_pools;
   int peak_pools;
+  int ring_operations; // Number of times hd.next is mutated
 } stats; // zero-initialized
 
 
@@ -131,10 +132,13 @@ static void free_chunk(void *p)
 
 static pool * alloc_pool()
 {
-  ++stats.total_alloced_pools;
-  ++stats.live_pools;
-  if (stats.live_pools > stats.peak_pools) stats.peak_pools = stats.live_pools;
-
+  if (PRINT_STATS) {
+    ++stats.total_alloced_pools;
+    ++stats.live_pools;
+    ++stats.ring_operations;
+    if (stats.live_pools > stats.peak_pools)
+      stats.peak_pools = stats.live_pools;
+  }
   pool *out = alloc_chunk();
 
   if (out == NULL) return NULL;
@@ -162,6 +166,7 @@ static void ring_insert(pool *source, pool **target)
     old->hd.prev = source->hd.prev;
     source->hd.prev = last;
     *target = young_pools;
+    if (PRINT_STATS) stats.ring_operations += 2;
   }
 }
 
@@ -178,6 +183,7 @@ static pool * ring_pop(pool **target)
   *target = front->hd.next;
   front->hd.next = front;
   front->hd.prev = front;
+  if (PRINT_STATS) stats.ring_operations += 2;
   return front;
 }
 
@@ -227,7 +233,7 @@ static void try_free_pool(pool *p)
   if (old_pools == hd) old_pools = p;
   else if (young_pools == hd) young_pools = p;
   free_chunk(hd);
-  stats.total_freed_pools++;
+  if (PRINT_STATS) stats.total_freed_pools++;
 }
 
 // Allocation, deallocation
@@ -448,7 +454,8 @@ static int mib_of_pools(int count)
 static int average(int total_work, int nb_collections) {
     if (nb_collections <= 0)
         return -1;
-    return (total_work / nb_collections);
+    // round to nearest
+    return ((total_work + (nb_collections / 2)) / nb_collections);
 }
 
 static void print_stats()
@@ -460,25 +467,29 @@ static void print_stats()
 
   int scanning_work_minor = average(stats.total_scanning_work_minor, stats.minor_collections);
   int scanning_work_major = average(stats.total_scanning_work_major, stats.major_collections);
+  int total_scanning_work = stats.total_scanning_work_minor + stats.total_scanning_work_major;
+  int ring_operations_per_pool = average(stats.ring_operations, stats.total_alloced_pools);
   int total_mib = mib_of_pools(stats.total_alloced_pools);
   int freed_mib = mib_of_pools(stats.total_freed_pools);
   int peak_mib = mib_of_pools(stats.peak_pools);
 
-  if (scanning_work_minor == 0
-      && scanning_work_major == 0
-      && stats.total_alloced_pools == 0)
+  if (total_scanning_work == 0 && stats.total_alloced_pools == 0)
     return;
 
   printf("work per minor: %d\n"
          "work per major: %d\n"
+         "total scanning work: %d\n"
          "total allocated pools: %d (%d MiB)\n"
          "total freed pools: %d (%d MiB)\n"
-         "peak allocated pools: %d (%d MiB)\n",
+         "peak allocated pools: %d (%d MiB)\n"
+         "ring operations per pool: %d\n",
          scanning_work_minor,
          scanning_work_major,
+         total_scanning_work,
          stats.total_alloced_pools, total_mib,
          stats.total_freed_pools, freed_mib,
-         stats.peak_pools, peak_mib);
+         stats.peak_pools, peak_mib,
+         ring_operations_per_pool);
 }
 
 // Must be called to set the hook
