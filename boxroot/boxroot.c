@@ -22,6 +22,13 @@
 /* Allocate with mmap?
    USE_MMAP requires POOL_SIZE to be equal the OS page size for now. */
 #define USE_MMAP 0
+/* Defrag during scanning?
+   + Better cache locality for successive allocations after lots of
+     deallocations.
+   + Better impact of bump pointer optimisation on scanning times after
+     lots of deallocations.
+   - Scanning more expensive (read-write instead of read-only). */
+#define DEFRAG 1
 /* DEBUG? (slow) */
 #define DEBUG 0
 
@@ -327,11 +334,17 @@ static int validate_pool(pool *pool, int do_capacity)
 
 static int scan_pool(scanning_action action, pool * pool)
 {
-  int i = 0;
+  size_t i = 0;
+  /* For DEFRAG */
+  size_t capacity = 0;
+  size_t allocs_to_find = POOL_ROOTS_CAPACITY - pool->hd.free_count;
+  slot **freelist_last = &pool->hd.free_list;
+  slot *freelist_next = NULL;
   for (; i < POOL_ROOTS_CAPACITY; ++i) {
     slot v = pool->roots[i];
     if (v == NULL) {
       // We can skip the rest if the pointer value is NULL.
+      if (DEFRAG && DEBUG) assert(allocs_to_find == 0);
       break;
     }
     if (get_pool_header(v) != pool) {
@@ -339,9 +352,37 @@ static int scan_pool(scanning_action action, pool * pool)
       // msbs differ from those of [pool], if the immediates
       // optimisation were to be turned off).
       (*action)((value)v, (value *) &pool->roots[i]);
+      if (DEFRAG && --allocs_to_find == 0) capacity = i+1;
+    } else if (DEFRAG) {
+      // Current slot is non-allocated (requires optimisation for
+      // immediates to avoid false positives).
+      if (allocs_to_find == 0) {
+        // Past the last allocation: set remaining to zero
+        for (size_t j = i; j < POOL_ROOTS_CAPACITY; ++j) {
+          slot *s = &pool->roots[j];
+          if (*s == NULL) break;
+          *s = NULL;
+        }
+        break;
+      } else {
+        // An element of the freelist. Sort the freelist and record
+        // the last_element.
+        slot **current = &pool->roots[i];
+        if (freelist_next == NULL) freelist_last = current;
+        *current = freelist_next;
+        freelist_next = (slot *)current;
+      }
     }
   }
-  pool->hd.capacity = i;
+  if (DEFRAG) {
+    // Now we know what is the first element of the freelist and where
+    // last element of the freelist points.
+    pool->hd.free_list = freelist_next;
+    *freelist_last = &pool->roots[capacity];
+    pool->hd.capacity = capacity;
+  } else {
+    pool->hd.capacity = i;
+  }
   return i;
 }
 

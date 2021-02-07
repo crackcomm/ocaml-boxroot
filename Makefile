@@ -43,6 +43,7 @@ test-boxroot: ./perm_count.bench
 
 clean:
 	rm -fR _build
+	rm perm_count.bench
 
 
 
