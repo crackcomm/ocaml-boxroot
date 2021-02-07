@@ -14,14 +14,14 @@
 
 // Options
 
-static const int do_print_stats = 1;
-
 #define POOL_LOG_SIZE 12 // 4KB
-// Allocate with mmap? For now requires POOL_SIZE to be equal the OS
-// page size.
-//#define USE_MMAP
-#define LOW_CAPACITY_THRESHOLD 50 // 50% capacity before promoting a
-                                  // young pool.
+#define LOW_CAPACITY_THRESHOLD 50 /* 50% capacity before promoting a
+                                     young pool. */
+/* Print statistics on teardown? */
+#define PRINT_STATS 1
+/* Allocate with mmap?
+   USE_MMAP requires POOL_SIZE to be equal the OS page size for now. */
+#define USE_MMAP 0
 
 // Data types
 
@@ -34,17 +34,17 @@ struct header {
   struct pool *next;
   slot *free_list;
   size_t free_count;
-  // Unoccupied slots are either NULL or a pointer to the next free
-  // slot. The null value acts as a terminator: if a slot is null,
-  // then all subsequent slots are null (bump pointer optimisation).
-  size_t capacity; // Number of non-null slots, updated at the end of
-                   // each scan.
+  size_t capacity; /* Number of non-null slots, updated at the end of
+                      each scan. */
 };
 
 #define POOL_ROOTS_CAPACITY ((POOL_SIZE - sizeof(struct header)) / sizeof(slot))
 
 typedef struct pool {
   struct header hd;
+  /* Unoccupied slots are either NULL or a pointer to the next free
+     slot. The null value acts as a terminator: if a slot is null,
+     then all subsequent slots are null (bump pointer optimisation). */
   slot roots[POOL_ROOTS_CAPACITY];
 } pool;
 
@@ -92,23 +92,23 @@ static void *aligned_alloc(size_t alignment, size_t size) {
 
 static void * alloc_chunk()
 {
-#ifdef USE_MMAP
-  if (POOL_SIZE != sysconf(_SC_PAGESIZE)) return NULL;
-  void *mem = mmap(0, POOL_SIZE, PROT_READ | PROT_WRITE,
-                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-  return (mem == MAP_FAILED) ? NULL : mem;
-#else
-  return aligned_alloc(POOL_SIZE, POOL_SIZE); // TODO: not portable
-#endif
+  if (USE_MMAP) {
+    if (POOL_SIZE != sysconf(_SC_PAGESIZE)) return NULL;
+    void *mem = mmap(0, POOL_SIZE, PROT_READ | PROT_WRITE,
+                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    return (mem == MAP_FAILED) ? NULL : mem;
+  } else {
+    return aligned_alloc(POOL_SIZE, POOL_SIZE); // TODO: not portable
+  }
 }
 
 static void free_chunk(void *p)
 {
-#ifdef USE_MMAP
-  munmap(p, POOL_SIZE);
-#else
-  free(p);
-#endif
+  if (USE_MMAP) {
+    munmap(p, POOL_SIZE);
+  } else {
+    free(p);
+  }
 }
 
 // Pool management
@@ -411,7 +411,7 @@ value boxroot_scan_hook_teardown(value unit)
 {
   caml_scan_roots_hook = boxroot_prev_scan_roots_hook;
   boxroot_prev_scan_roots_hook = NULL;
-  if (do_print_stats) print_stats();
+  if (PRINT_STATS) print_stats();
   force_free_pools(young_pools);
   force_free_pools(old_pools);
   return Val_unit;
