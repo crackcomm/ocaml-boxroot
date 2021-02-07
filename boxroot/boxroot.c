@@ -349,11 +349,8 @@ void boxroot_scan_hook_teardown()
 
 static class classify_value(value v)
 {
-  if(!Is_block(v)) return UNTRACKED;
+  if(v == NULL || !Is_block(v)) return UNTRACKED;
   if(Is_young(v)) return YOUNG;
-#ifndef NO_NAKED_POINTERS
-  if(!Is_in_heap(v)) return UNTRACKED;
-#endif
   return OLD;
 }
 
