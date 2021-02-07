@@ -13,13 +13,16 @@ perm_count: $(CHOICE_MODULES) config.ml perm_count.ml
 	ocamlopt -g -c perm_count.ml
 	ocamlopt -g -o $@ $(CHOICE_MODULES) config.cmx perm_count.cmx
 
-include Makefile.common
+%.cmx: %.ml
+	ocamlopt -g -c $< -o $@
 
-boxroot/boxroot.o: boxroot/boxroot.c
-	$(MAKE) -C boxroot boxroot.o
+# before OCaml 4.12, (ocamlopt -c foo/bar.c -o foo/bar.o) is not supported
+# (-c and -o together are rejected)
+%.o: %.c *.h
+	$(shell ocamlopt -config-var native_c_compiler) -g -I'$(shell ocamlopt -where)' -c $< -o $@
 
-clean::
-	make -C boxroot clean
+clean:
+	rm -f $(foreach dir, . boxroot, $(dir)/*.cm* $(dir)/*.o)
 
 EMPTY=
 
