@@ -22,6 +22,8 @@
 /* Allocate with mmap?
    USE_MMAP requires POOL_SIZE to be equal the OS page size for now. */
 #define USE_MMAP 0
+/* DEBUG? (slow) */
+#define DEBUG 0
 
 // Data types
 
@@ -38,7 +40,13 @@ struct header {
                       each scan. */
 };
 
-#define POOL_ROOTS_CAPACITY ((POOL_SIZE - sizeof(struct header)) / sizeof(slot))
+#define POOL_ROOTS_CAPACITY                               \
+  ((POOL_SIZE - sizeof(struct header)) / sizeof(slot) - 1)
+/* &pool->roots[POOL_ROOTS_CAPACITY] can end up as a placeholder value
+   in the freelist to denote the end of the freelist, starting from
+   the first time after releasing from a full pool. To ensure that
+   this value is recognised by the test [get_pool_header(v) == pool],
+   we subtract one from the capacity. */
 
 typedef struct pool {
   struct header hd;
@@ -48,7 +56,7 @@ typedef struct pool {
   slot roots[POOL_ROOTS_CAPACITY];
 } pool;
 
-static_assert(sizeof(pool) == POOL_SIZE, "bad pool size");
+static_assert(sizeof(pool) == POOL_SIZE - sizeof(slot), "bad pool size");
 
 // hot path
 static inline pool * get_pool_header(slot v)
@@ -276,6 +284,47 @@ static int is_minor_scanning(scanning_action action)
   return action == &caml_oldify_one;
 }
 
+static int validate_pool(pool *pool, int do_capacity)
+{
+  // check capacity (needs to be up-to-date)
+  if (do_capacity) {
+    size_t i = 0;
+    for (; i < POOL_ROOTS_CAPACITY; i++) {
+      if (pool->roots[i] == NULL) break;
+    }
+    assert(pool->hd.capacity == i);
+  }
+  // check freelist structure and length
+  slot *pool_end = &pool->roots[POOL_ROOTS_CAPACITY];
+  slot *curr = pool->hd.free_list;
+  size_t length = 0;
+  while (curr != pool_end) {
+    length++;
+    assert(length <= POOL_ROOTS_CAPACITY);
+    assert(curr >= pool->roots && curr < pool_end);
+    slot s = *curr;
+    if (s == NULL) {
+      for (size_t i = curr - pool->roots + 1; i < POOL_ROOTS_CAPACITY; i++) {
+        length++;
+        assert(pool->roots[i] == NULL);
+      }
+      break;
+    }
+    curr = (slot *)s;
+  }
+  assert(length == pool->hd.free_count);
+  // check count of allocated elements
+  size_t free_count = POOL_ROOTS_CAPACITY;
+  for(size_t i = 0; i < POOL_ROOTS_CAPACITY; i++) {
+    slot v = pool->roots[i];
+    if (v == NULL) break;
+    if (get_pool_header(v) != pool) {
+      --free_count;
+    }
+  }
+  assert(free_count == pool->hd.free_count);
+}
+
 static int scan_pool(scanning_action action, pool * pool)
 {
   int i = 0;
@@ -301,10 +350,12 @@ static int scan_pools(scanning_action action, pool *start_pool)
   int work = 0;
   if (start_pool == NULL) return work;
   work += scan_pool(action, start_pool);
+  if (DEBUG) validate_pool(start_pool, 1);
   for (pool *pool = start_pool->hd.next;
        pool != start_pool;
        pool = pool->hd.next) {
     work += scan_pool(action, pool);
+    if (DEBUG) validate_pool(pool, 1);
   }
   return work;
 }
