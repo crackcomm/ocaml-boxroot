@@ -87,6 +87,9 @@ typedef enum class {
 static struct {
   int minor_collections;
   int major_collections;
+  int total_create;
+  int total_delete;
+  int total_modify;
   int total_scanning_work_minor;
   int total_scanning_work_major;
   int total_alloced_pools;
@@ -478,17 +481,28 @@ static void print_stats()
 
   printf("work per minor: %d\n"
          "work per major: %d\n"
-         "total scanning work: %d\n"
-         "total allocated pools: %d (%d MiB)\n"
-         "total freed pools: %d (%d MiB)\n"
-         "peak allocated pools: %d (%d MiB)\n"
-         "ring operations per pool: %d\n",
+         "total scanning work: %d\n",
          scanning_work_minor,
          scanning_work_major,
-         total_scanning_work,
+         total_scanning_work);
+
+  printf("total created: %d\n"
+         "total deleted: %d\n"
+         "total modified: %d\n",
+         stats.total_create,
+         stats.total_delete,
+         stats.total_modify);
+
+  printf("total allocated pools: %d (%d MiB)\n"
+         "total freed pools: %d (%d MiB)\n"
+         "peak allocated pools: %d (%d MiB)\n",
          stats.total_alloced_pools, total_mib,
          stats.total_freed_pools, freed_mib,
-         stats.peak_pools, peak_mib,
+         stats.peak_pools, peak_mib);
+
+  printf("total ring operations: %d\n"
+         "ring operations per pool: %d\n",
+         stats.ring_operations,
          ring_operations_per_pool);
 }
 
@@ -540,6 +554,7 @@ static inline class classify_boxroot(boxroot root)
 // hot path
 static inline boxroot boxroot_create_classified(value init, class class)
 {
+  if (PRINT_STATS) ++stats.total_create;
   value *cell;
   if (class != UNTRACKED) {
     cell = alloc_boxroot(class);
@@ -568,6 +583,7 @@ value const * boxroot_get(boxroot root)
 // hot path
 static inline void boxroot_delete_classified(boxroot root, class class)
 {
+  if (PRINT_STATS) ++stats.total_delete;
   value *cell = (value *)root;
   if (class != UNTRACKED) {
     free_boxroot(cell);
@@ -585,6 +601,7 @@ void boxroot_delete(boxroot root)
 void boxroot_modify(boxroot *root, value new_value)
 {
   CAMLassert(*root);
+  if (PRINT_STATS) ++stats.total_modify;
   class old_class = classify_boxroot(*root);
   class new_class = classify_value(new_value);
 
