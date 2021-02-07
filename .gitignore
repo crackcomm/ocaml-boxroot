@@ -1,7 +1,4 @@
-*.cmi
-*.cmx
-*.o
-*.a
-perm_count
+_build
+*.bench
 compile_flags.txt
 .vscode

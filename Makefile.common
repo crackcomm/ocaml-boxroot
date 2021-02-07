@@ -1,8 +1,0 @@
-%.cmx: %.ml
-	ocamlopt -g -c $<
-
-%.o: %.c *.h
-	ocamlopt -g -c $<
-
-clean::
-	rm -f *.cm* *.o

@@ -1,28 +1,23 @@
-CHOICE_MODULES = \
-  choice_ocaml_persistent.cmx \
-  choice_ocaml_ephemeral.cmx \
-  choice_gc_stubs.o choice_gc.cmx \
-  abstract_value.o \
-  choice_global_roots_stubs.o choice_global_roots.cmx \
-  choice_generational_global_roots_stubs.o choice_generational_global_roots.cmx \
-  fake_boxroot.o choice_fake_boxroots_stubs.o choice_fake_boxroots.cmx \
-  boxroot/boxroot.o choice_boxroots_stubs.o choice_boxroots.cmx
+# Entry points
 
-perm_count: $(CHOICE_MODULES) config.ml perm_count.ml
-	ocamlopt -g -c config.ml
-	ocamlopt -g -c perm_count.ml
-	ocamlopt -g -o $@ $(CHOICE_MODULES) config.cmx perm_count.cmx
+BENCHMARKS = $(addprefix ,\
+  perm_count.bench \
+)
 
-include Makefile.common
+.PHONY: entry
+entry:
+	@echo "make all: build all benchmarks"
+	@echo "make run: run all benchmarks"
+	@echo "make test-boxroot: test boxroot on perm_count"
+	@echo "make clean"
 
-boxroot/boxroot.o: boxroot/boxroot.c
-	$(MAKE) -C boxroot boxroot.o
+.PHONY: all
+all: $(BENCHMARKS)
 
-clean::
-	make -C boxroot clean
+%.bench: _build/%.exe
+	cp $< $@
 
 EMPTY=
-
 IMPLEMENTATIONS=\
   ocaml-persistent \
   ocaml-ephemeral \
@@ -33,8 +28,79 @@ IMPLEMENTATIONS=\
   boxroots \
   $(EMPTY)
 
-.PHONY: bench
-bench: perm_count
-	@export NITER=10 $(foreach IMPLEM, $(IMPLEMENTATIONS), \
-	    && (echo "---"; IMPLEM=$(IMPLEM) ./perm_count) \
-	)
+run_bench = \
+  export NITER=$(2) $(foreach IMPLEM, $(IMPLEMENTATIONS), \
+    && (echo "---"; IMPLEM=$(IMPLEM) $(1)) \
+  )
+
+.PHONY: run
+run: $(BENCHMARKS)
+	$(call run_bench,./perm_count.bench,10)
+
+.PHONY: test-boxroot
+test-boxroot: ./perm_count.bench
+	NITER=10 IMPLEM=boxroots ./perm_count.bench
+
+clean:
+	rm -fR _build
+
+
+
+# Build rules
+
+C_HEADERS=$(addprefix _build/,$(wildcard boxroot/*.h choice/*.h))
+
+BOXROOT_LIB = $(addprefix _build/boxroot/,\
+  boxroot.o \
+)
+
+CHOICE_MODULES = $(addprefix _build/choice/,\
+  choice_ocaml_persistent.cmx \
+  choice_ocaml_ephemeral.cmx \
+  abstract_value.o \
+  choice_gc_stubs.o choice_gc.cmx \
+  choice_global_roots_stubs.o choice_global_roots.cmx \
+  choice_generational_global_roots_stubs.o choice_generational_global_roots.cmx \
+  fake_boxroot.o choice_fake_boxroots_stubs.o choice_fake_boxroots.cmx \
+  choice_boxroots_stubs.o choice_boxroots.cmx \
+  config.cmx \
+)
+
+LIB_DIRS=boxroot choice
+INCLUDE_LIB_DIRS=$(foreach DIR,$(LIB_DIRS), -I _build/$(DIR))
+
+# for debugging
+.PHONY: show-deps
+show-deps:
+	@echo $(C_HEADERS) $(BOXROOT_LIB) $(CHOICE_MODULES)
+
+%.exe: $(BOXROOT_LIB) $(CHOICE_MODULES) %.cmx
+	@mkdir -p $(shell dirname ./$@)
+	ocamlopt $(INCLUDE_LIB_DIRS) -g -o $@ $^
+# see http://www.gnu.org/software/make/manual/html_node/Chained-Rules.html
+.SECONDARY: $(BOXROOT_LIB) $(CHOICE_MODULES)
+.PRECIOUS: %.cmx
+
+# copy rules
+.PRECIOUS: _build/%.c _build/%.h _build/%.ml
+_build/%.c: %.c
+	@mkdir -p $(shell dirname ./$@)
+	cp $< $@
+
+_build/%.h: %.h
+	@mkdir -p $(shell dirname ./$@)
+	cp $< $@
+
+_build/%.ml: %.ml
+	@mkdir -p $(shell dirname ./$@)
+	cp $< $@
+
+%.cmx: %.ml
+	@mkdir -p $(shell dirname ./$@)
+	ocamlopt $(INCLUDE_LIB_DIRS) -g -c $< -o $@
+
+# before OCaml 4.12, (ocamlopt -c foo/bar.c -o foo/bar.o) is not supported
+# (-c and -o together are rejected)
+.SECONDARY: $(C_HEADERS)
+%.o: %.c $(C_HEADERS)
+	$(shell ocamlopt -config-var native_c_compiler) -g -I'$(shell ocamlopt -where)' -I_build -I$(shell dirname $<) -c $< -o $@
