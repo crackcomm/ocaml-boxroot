@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #define CAML_INTERNALS
 
@@ -11,20 +12,20 @@
 #include <caml/roots.h>
 #include <caml/minor_gc.h>
 
-#ifdef __APPLE__
-static void *aligned_alloc(size_t alignment, size_t size) {
-  void *memptr = NULL;
-  posix_memalign(&memptr, alignment, size);
-  return memptr;
-}
-#endif
+// Options
 
 static const int do_print_stats = 1;
 
 #define POOL_LOG_SIZE 12 // 4KB
-#define POOL_SIZE (1 << POOL_LOG_SIZE)
+// Allocate with mmap? For now requires POOL_SIZE to be equal the OS
+// page size.
+//#define USE_MMAP
 #define LOW_CAPACITY_THRESHOLD 50 // 50% capacity before promoting a
                                   // young pool.
+
+// Data types
+
+#define POOL_SIZE (1 << POOL_LOG_SIZE)
 
 typedef void * slot;
 
@@ -78,13 +79,47 @@ static struct {
   int peak_pools;
 } stats; // zero-initialized
 
+
+// Platform-specific
+
+#ifdef __APPLE__
+static void *aligned_alloc(size_t alignment, size_t size) {
+  void *memptr = NULL;
+  posix_memalign(&memptr, alignment, size);
+  return memptr;
+}
+#endif
+
+static void * alloc_chunk()
+{
+#ifdef USE_MMAP
+  if (POOL_SIZE != sysconf(_SC_PAGESIZE)) return NULL;
+  void *mem = mmap(0, POOL_SIZE, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  return (mem == MAP_FAILED) ? NULL : mem;
+#else
+  return aligned_alloc(POOL_SIZE, POOL_SIZE); // TODO: not portable
+#endif
+}
+
+static void free_chunk(void *p)
+{
+#ifdef USE_MMAP
+  munmap(p, POOL_SIZE);
+#else
+  free(p);
+#endif
+}
+
+// Pool management
+
 static pool * alloc_pool()
 {
   ++stats.total_alloced_pools;
   ++stats.live_pools;
   if (stats.live_pools > stats.peak_pools) stats.peak_pools = stats.live_pools;
 
-  pool *out = aligned_alloc(POOL_SIZE, POOL_SIZE); // TODO: not portable
+  pool *out = alloc_chunk();
 
   if (out == NULL) return NULL;
 
@@ -175,7 +210,7 @@ static void try_free_pool(pool *p)
   pool *hd = ring_pop(&p);
   if (old_pools == hd) old_pools = p;
   else if (young_pools == hd) young_pools = p;
-  free(hd);
+  free_chunk(hd);
   stats.total_freed_pools++;
 }
 
@@ -367,7 +402,7 @@ static void force_free_pools(pool *start)
   pool *p = start;
   do {
     pool *next = p->hd.next;
-    free(p);
+    free_chunk(p);
     p = next;
   } while (p != start);
 }
