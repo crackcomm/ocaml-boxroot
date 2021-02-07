@@ -2,6 +2,7 @@
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -50,10 +51,10 @@ struct header {
 #define POOL_ROOTS_CAPACITY                               \
   ((POOL_SIZE - sizeof(struct header)) / sizeof(slot) - 1)
 /* &pool->roots[POOL_ROOTS_CAPACITY] can end up as a placeholder value
-   in the freelist to denote the end of the freelist, starting from
-   the first time after releasing from a full pool. To ensure that
-   this value is recognised by the test [get_pool_header(v) == pool],
-   we subtract one from the capacity. */
+   in the freelist to denote the last element of the freelist,
+   starting from the after releasing from a full pool for the first
+   time. To ensure that this value is recognised by the test
+   [get_pool_header(v) == pool], we subtract one from the capacity. */
 
 typedef struct pool {
   struct header hd;
@@ -73,9 +74,9 @@ static inline pool * get_pool_header(slot v)
 
 // Rings of pools
 static pool *old_pools = NULL; // Contains only roots pointing to
-                                 // the major heap
+                               // the major heap
 static pool *young_pools = NULL; // Contains roots pointing to the
-                                   // major or the minor heap
+                                 // major or the minor heap
 
 typedef enum class {
   YOUNG,
