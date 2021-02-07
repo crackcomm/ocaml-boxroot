@@ -422,7 +422,7 @@ value boxroot_scan_hook_teardown(value unit)
 // hot path
 static inline class classify_value(value v)
 {
-  if(v == NULL || !Is_block(v)) return UNTRACKED;
+  if(v == 0 || !Is_block(v)) return UNTRACKED;
   if(Is_young(v)) return YOUNG;
   return OLD;
 }
