@@ -258,7 +258,8 @@ static void scan_for_minor(scanning_action action)
   if ((young_chunks->capacity * 100 / CHUNK_ROOTS_CAPACITY) <=
       LOW_CAPACITY_THRESHOLD)
     new_young_chunk = ring_pop(&young_chunks);
-  ring_insert(young_chunks, &old_chunks);
+  if (young_chunks != NULL)
+      ring_insert(young_chunks, &old_chunks);
   // allocate the new young chunk lazily
   young_chunks = new_young_chunk;
 }
