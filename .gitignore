@@ -2,6 +2,6 @@
 *.cmx
 *.o
 *.a
-perm_count
+*.exe
 compile_flags.txt
 .vscode
