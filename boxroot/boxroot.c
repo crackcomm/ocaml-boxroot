@@ -100,6 +100,7 @@ static struct {
   int total_freed_pools;
   int live_pools;
   int peak_pools;
+  int get_available_pool_seeking;
   int ring_operations; // Number of times hd.next is mutated
   int defrag_sort;
   int defrag_shorten;
@@ -217,6 +218,7 @@ static pool * get_available_pool(class class)
     for (pool *next_pool = start_pool->hd.next;
          next_pool != start_pool;
          next_pool = next_pool->hd.next) {
+      if (PRINT_STATS) ++stats.get_available_pool_seeking;
       if (next_pool->hd.free_count > 0) {
         // Rotate the ring, making the pool with free slots the head
         *pool_ring = next_pool;
@@ -456,9 +458,10 @@ static void boxroot_scan_roots(scanning_action action)
   }
 }
 
-static int mib_of_pools(int count)
+// 1=KiB, 2=MiB
+static int kib_of_pools(int count, int unit)
 {
-  int log_per_pool = POOL_LOG_SIZE - 20;
+  int log_per_pool = POOL_LOG_SIZE - unit * 10;
   if (log_per_pool >= 0) return count << log_per_pool;
   if (log_per_pool < 0) return count >> -log_per_pool;
 }
@@ -481,12 +484,23 @@ static void print_stats()
   int scanning_work_major = average(stats.total_scanning_work_major, stats.major_collections);
   int total_scanning_work = stats.total_scanning_work_minor + stats.total_scanning_work_major;
   int ring_operations_per_pool = average(stats.ring_operations, stats.total_alloced_pools);
-  int total_mib = mib_of_pools(stats.total_alloced_pools);
-  int freed_mib = mib_of_pools(stats.total_freed_pools);
-  int peak_mib = mib_of_pools(stats.peak_pools);
+  int total_mib = kib_of_pools(stats.total_alloced_pools, 2);
+  int freed_mib = kib_of_pools(stats.total_freed_pools, 2);
+  int peak_mib = kib_of_pools(stats.peak_pools, 2);
 
   if (total_scanning_work == 0 && stats.total_alloced_pools == 0)
     return;
+
+  printf("POOL_LOG_SIZE: %d (%d KiB, %d roots)\n"
+         "LOW_CAPACITY_THRESHOLD: %d%%\n"
+         "USE_MMAP: %d\n"
+         "DEFRAG: %d\n"
+         "DEBUG: %d\n",
+         (int)POOL_LOG_SIZE, kib_of_pools((int)1, 1), (int)POOL_ROOTS_CAPACITY,
+         (int)LOW_CAPACITY_THRESHOLD,
+         (int)USE_MMAP,
+         (int)DEFRAG,
+         (int)DEBUG);
 
   printf("work per minor: %d\n"
          "work per major: %d\n"
@@ -504,10 +518,12 @@ static void print_stats()
 
   printf("total allocated pools: %d (%d MiB)\n"
          "total freed pools: %d (%d MiB)\n"
-         "peak allocated pools: %d (%d MiB)\n",
+         "peak allocated pools: %d (%d MiB)\n"
+         "get_available_pool seeking: %d\n",
          stats.total_alloced_pools, total_mib,
          stats.total_freed_pools, freed_mib,
-         stats.peak_pools, peak_mib);
+         stats.peak_pools, peak_mib,
+         stats.get_available_pool_seeking);
 
   printf("total ring operations: %d\n"
          "ring operations per pool: %d\n",
