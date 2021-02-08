@@ -16,14 +16,34 @@
 
 // Options
 
-#define POOL_LOG_SIZE 12 // 4KB
+#define POOL_LOG_SIZE 15 // 12 = 4KB
 #define LOW_CAPACITY_THRESHOLD 50 /* 50% capacity before promoting a
                                      young pool. */
 /* Print statistics on teardown? */
 #define PRINT_STATS 1
-/* Allocate with mmap?
-   USE_MMAP requires POOL_SIZE to be equal the OS page size for now. */
+/* Allocate with mmap? */
 #define USE_MMAP 0
+/* Advise to use transparent huge pages? (Linux)
+
+   Little effect in my experiments. This is to investigate further:
+   indeed the options "thp:always,metadata_thp:auto" for jemalloc
+   consistently brings it faster than ocaml-ephemeral. FTR:
+   `MALLOC_CONF="thp:always,metadata_thp:auto"                 \
+   LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2       \
+   make run`. (probably due to the malloc in value_list_functor.h)
+*/
+#define USE_MADV_HUGEPAGE 1
+/* Whether to pre-allocate several pools at once. Free pools are put
+   aside and re-used instead of being immediately freed. Does not
+   support memory reclamation yet.
+   + Visible effect for large pool sizes (independently of superblock
+     size) with glibc malloc. Probably by avoiding the cost of memory
+     reclamation. Note: this is fair: it is enough to reclaim memory
+     at Gc.compact like the OCaml Gc. Not observed with jemalloc.
+   - Slower than aligned_alloc for small pool sizes (independently of
+     superblock sizes?). */
+#define USE_SUPERBLOCK 1
+#define SUPERBLOCK_LOG_SIZE 21 // 21 = 2MB (a huge page)
 /* Defragment during scanning?
    + Better cache locality for successive allocations after lots of
      deallocations.
@@ -36,9 +56,28 @@
 /* DEBUG? (slow) */
 #define DEBUG 0
 
+// for MADV_HUGEPAGE
+#define HUGEPAGE_LOG_SIZE 21 // 2MB on x86_64 Linux
+#if USE_MADV_HUGEPAGE != 0
+  #include <sys/mman.h>
+#endif
+
+
 // Data types
 
-#define POOL_SIZE ((size_t)(1 << POOL_LOG_SIZE))
+#define CHUNK_LOG_SIZE (USE_SUPERBLOCK ? SUPERBLOCK_LOG_SIZE : POOL_LOG_SIZE)
+
+static_assert(CHUNK_LOG_SIZE >= POOL_LOG_SIZE,
+              "chunk size smaller than pool size");
+static_assert(!USE_MADV_HUGEPAGE || CHUNK_LOG_SIZE >= HUGEPAGE_LOG_SIZE,
+              "chunk size smaller than a huge page");
+
+#define POOL_SIZE ((size_t)1 << POOL_LOG_SIZE)
+#define CHUNK_SIZE ((size_t)1 << CHUNK_LOG_SIZE)
+#define CHUNK_ALIGNMENT                                         \
+  ((USE_MADV_HUGEPAGE && POOL_LOG_SIZE < HUGEPAGE_LOG_SIZE) ?   \
+   ((size_t)1 << HUGEPAGE_LOG_SIZE) : POOL_SIZE)
+#define POOLS_PER_CHUNK (CHUNK_SIZE / POOL_SIZE)
 
 typedef void * slot;
 
@@ -55,7 +94,7 @@ struct header {
   ((POOL_SIZE - sizeof(struct header)) / sizeof(slot) - 1)
 /* &pool->roots[POOL_ROOTS_CAPACITY] can end up as a placeholder value
    in the freelist to denote the last element of the freelist,
-   starting from the after releasing from a full pool for the first
+   starting from after releasing from a full pool for the first
    time. To ensure that this value is recognised by the test
    [get_pool_header(v) == pool], we subtract one from the capacity. */
 
@@ -65,10 +104,11 @@ typedef struct pool {
      slot. The null value acts as a terminator: if a slot is null,
      then all subsequent slots are null (bump pointer optimisation). */
   slot roots[POOL_ROOTS_CAPACITY];
+  uintptr_t end;// unused
 } pool;
 
-static_assert((size_t)POOL_ROOTS_CAPACITY <= (size_t)INT_MAX, "capacity too large");
-static_assert(sizeof(pool) == POOL_SIZE - sizeof(slot), "bad pool size");
+static_assert(POOL_ROOTS_CAPACITY <= INT_MAX, "capacity too large");
+static_assert(sizeof(pool) == POOL_SIZE, "bad pool size");
 
 // hot path
 static inline pool * get_pool_header(slot v)
@@ -81,6 +121,7 @@ static pool *old_pools = NULL; // Contains only roots pointing to
                                // the major heap
 static pool *young_pools = NULL; // Contains roots pointing to the
                                  // major or the minor heap
+static pool *free_pools = NULL; // Contains free uninitialized pools
 
 typedef enum class {
   YOUNG,
@@ -96,6 +137,7 @@ static struct {
   int total_modify;
   int total_scanning_work_minor;
   int total_scanning_work_major;
+  int total_alloced_chunks;
   int total_alloced_pools;
   int total_freed_pools;
   int live_pools;
@@ -117,53 +159,62 @@ static void *aligned_alloc(size_t alignment, size_t size) {
 }
 #endif
 
+
+static void printbinary(uintptr_t n)
+{
+  printf("\n");
+  for (int i = 63; i >= 0; i--) {
+    if (n & ((uintptr_t)1 << i))
+      printf("1");
+    else
+      printf("0");
+  }
+  printf("\n");
+}
+
 static void * alloc_chunk()
 {
+  void *p = NULL;
   if (USE_MMAP) {
-    if (POOL_SIZE != sysconf(_SC_PAGESIZE)) return NULL;
-    void *mem = mmap(0, POOL_SIZE, PROT_READ | PROT_WRITE,
-                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    return (mem == MAP_FAILED) ? NULL : mem;
+    uintptr_t bitmask = ((uintptr_t)CHUNK_ALIGNMENT) - 1;
+    p = mmap(0, CHUNK_SIZE + CHUNK_ALIGNMENT, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) p = NULL;
+    // align p
+    p = (void *)(((uintptr_t)p + bitmask) & ~bitmask);
+    // TODO: release unused portions
   } else {
-    return aligned_alloc(POOL_SIZE, POOL_SIZE); // TODO: not portable
+    p = aligned_alloc(CHUNK_ALIGNMENT, CHUNK_SIZE); // TODO: not portable
   }
+  if (p == NULL) return NULL;
+#if USE_MADV_HUGEPAGE != 0
+  madvise(p, CHUNK_SIZE, MADV_HUGEPAGE);
+#endif
+  if (PRINT_STATS) ++stats.total_alloced_chunks;
+  return p;
 }
 
 static void free_chunk(void *p)
 {
   if (USE_MMAP) {
-    munmap(p, POOL_SIZE);
+    // TODO: not implemented
+    //munmap(p, POOL_SIZE);
   } else {
     free(p);
   }
 }
 
-// Pool management
+// Ring operations
 
-static pool * alloc_pool()
+static void ring_init(pool *p)
 {
-  if (PRINT_STATS) {
-    ++stats.total_alloced_pools;
-    ++stats.live_pools;
-    ++stats.ring_operations;
-    if (stats.live_pools > stats.peak_pools)
-      stats.peak_pools = stats.live_pools;
-  }
-  pool *out = alloc_chunk();
-
-  if (out == NULL) return NULL;
-
-  out->hd.prev = out->hd.next = out;
-  out->hd.free_list = out->roots;
-  out->hd.free_count = POOL_ROOTS_CAPACITY;
-  out->hd.capacity = 0;
-  memset(out->roots, 0, sizeof(out->roots));
-
-  return out;
+  p->hd.next = p;
+  p->hd.prev = p;
+  if (PRINT_STATS) ++stats.ring_operations;
 }
 
-// insert [source] in front of [*target]
-static void ring_insert(pool *source, pool **target)
+// insert the ring [source] in front of [*target]
+static void ring_concat(pool *source, pool **target)
 {
   if (source == NULL) return;
   pool *old = *target;
@@ -175,7 +226,7 @@ static void ring_insert(pool *source, pool **target)
     source->hd.prev->hd.next = old;
     old->hd.prev = source->hd.prev;
     source->hd.prev = last;
-    *target = young_pools;
+    *target = source;
     if (PRINT_STATS) stats.ring_operations += 2;
   }
 }
@@ -184,17 +235,55 @@ static void ring_insert(pool *source, pool **target)
 static pool * ring_pop(pool **target)
 {
   pool *front = *target;
+  assert(front);
   if (front->hd.next == front) {
+    assert(front->hd.prev == front);
     *target = NULL;
     return front;
   }
   front->hd.prev->hd.next = front->hd.next;
   front->hd.next->hd.prev = front->hd.prev;
+  if (PRINT_STATS) ++stats.ring_operations;
   *target = front->hd.next;
-  front->hd.next = front;
-  front->hd.prev = front;
-  if (PRINT_STATS) stats.ring_operations += 2;
+  ring_init(front);
   return front;
+}
+
+// Pool management
+
+static pool * get_free_pool()
+{
+  if (free_pools != NULL) {
+    return ring_pop(&free_pools);
+  }
+  pool *chunk = alloc_chunk();
+  if (chunk == NULL) return NULL;
+  pool *p;
+  for (p = chunk + POOLS_PER_CHUNK - 1; p >= chunk; p--) {
+    ring_init(p);
+    ring_concat(p, &free_pools);
+  }
+  return ring_pop(&free_pools);
+}
+
+static pool * alloc_pool()
+{
+  if (PRINT_STATS) {
+    ++stats.total_alloced_pools;
+    ++stats.live_pools;
+    if (stats.live_pools > stats.peak_pools)
+      stats.peak_pools = stats.live_pools;
+  }
+  pool *out = get_free_pool();
+
+  if (out == NULL) return NULL;
+
+  out->hd.free_list = out->roots;
+  out->hd.free_count = POOL_ROOTS_CAPACITY;
+  out->hd.capacity = 0;
+  memset(out->roots, 0, sizeof(out->roots));
+
+  return out;
 }
 
 // Find an available pool for the class; place it in front of the ring
@@ -230,7 +319,7 @@ static pool * get_available_pool(class class)
   // None found, add a new pool at the start
   pool *new_pool = alloc_pool();
   if (new_pool == NULL) return NULL;
-  ring_insert(new_pool, pool_ring);
+  ring_concat(new_pool, pool_ring);
 
   return new_pool;
 }
@@ -243,7 +332,13 @@ static void try_free_pool(pool *p)
   pool *hd = ring_pop(&p);
   if (old_pools == hd) old_pools = p;
   else if (young_pools == hd) young_pools = p;
-  free_chunk(hd);
+  assert(hd != free_pools);
+  if (USE_SUPERBLOCK) {
+    // TODO: implement reclamation
+    ring_concat(hd, &free_pools);
+  } else {
+    free_chunk(hd);
+  }
   if (PRINT_STATS) stats.total_freed_pools++;
 }
 
@@ -434,7 +529,7 @@ static void scan_for_minor(scanning_action action)
       LOW_CAPACITY_THRESHOLD) {
     new_young_pool = ring_pop(&young_pools);
   }
-  ring_insert(young_pools, &old_pools);
+  ring_concat(young_pools, &old_pools);
   young_pools = new_young_pool;
 }
 
@@ -494,13 +589,35 @@ static void print_stats()
   printf("POOL_LOG_SIZE: %d (%d KiB, %d roots)\n"
          "LOW_CAPACITY_THRESHOLD: %d%%\n"
          "USE_MMAP: %d\n"
+         "USE_MADV_HUGEPAGE: %d\n"
+         "USE_SUPERBLOCK: %d\n"
+         "SUPERBLOCK_LOG_SIZE: %d\n"
          "DEFRAG: %d\n"
          "DEBUG: %d\n",
          (int)POOL_LOG_SIZE, kib_of_pools((int)1, 1), (int)POOL_ROOTS_CAPACITY,
          (int)LOW_CAPACITY_THRESHOLD,
          (int)USE_MMAP,
+         (int)USE_MADV_HUGEPAGE,
+         (int)USE_SUPERBLOCK,
+         (int)SUPERBLOCK_LOG_SIZE,
          (int)DEFRAG,
          (int)DEBUG);
+
+  printf("CHUNK_SIZE: %d kiB (%d pools)\n"
+         "CHUNK_ALIGNMENT: %d kiB\n"
+         "total allocated chunks: %d (%d pools)\n",
+         kib_of_pools(POOLS_PER_CHUNK,1), (int)POOLS_PER_CHUNK,
+         kib_of_pools(CHUNK_ALIGNMENT / POOL_SIZE,1),
+         stats.total_alloced_chunks, stats.total_alloced_chunks * (int)POOLS_PER_CHUNK);
+
+  printf("total allocated pools: %d (%d MiB)\n"
+         "total freed pools: %d (%d MiB)\n"
+         "peak allocated pools: %d (%d MiB)\n"
+         "get_available_pool seeking: %d\n",
+         stats.total_alloced_pools, total_mib,
+         stats.total_freed_pools, freed_mib,
+         stats.peak_pools, peak_mib,
+         stats.get_available_pool_seeking);
 
   printf("work per minor: %d\n"
          "work per major: %d\n"
@@ -515,15 +632,6 @@ static void print_stats()
          stats.total_create,
          stats.total_delete,
          stats.total_modify);
-
-  printf("total allocated pools: %d (%d MiB)\n"
-         "total freed pools: %d (%d MiB)\n"
-         "peak allocated pools: %d (%d MiB)\n"
-         "get_available_pool seeking: %d\n",
-         stats.total_alloced_pools, total_mib,
-         stats.total_freed_pools, freed_mib,
-         stats.peak_pools, peak_mib,
-         stats.get_available_pool_seeking);
 
   printf("total ring operations: %d\n"
          "ring operations per pool: %d\n",
@@ -546,6 +654,10 @@ value boxroot_scan_hook_setup(value unit)
 
 static void force_free_pools(pool *start)
 {
+  if (USE_SUPERBLOCK) {
+    // TODO: not implemented
+    return;
+  }
   if (start == NULL) return;
   pool *p = start;
   do {
