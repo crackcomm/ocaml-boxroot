@@ -32,7 +32,7 @@
    - Scanning is a lot more expensive (read-write instead of read-only).
    TODO: Option to defragment every X, or find a measure of fragmentation
    to decide when to defragment. */
-#define DEFRAG 1
+#define DEFRAG 0
 /* DEBUG? (slow) */
 #define DEBUG 0
 
