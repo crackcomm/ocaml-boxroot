@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <limits.h>
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -35,7 +36,7 @@
 
 // Data types
 
-#define POOL_SIZE (1 << POOL_LOG_SIZE)
+#define POOL_SIZE ((size_t)(1 << POOL_LOG_SIZE))
 
 typedef void * slot;
 
@@ -43,9 +44,9 @@ struct header {
   struct pool *prev;
   struct pool *next;
   slot *free_list;
-  size_t free_count;
-  size_t capacity; /* Number of non-null slots, updated at the end of
-                      each scan. */
+  int free_count;
+  int capacity; /* Number of non-null slots, updated at the end of
+                   each scan. */
 };
 
 #define POOL_ROOTS_CAPACITY                               \
@@ -64,6 +65,7 @@ typedef struct pool {
   slot roots[POOL_ROOTS_CAPACITY];
 } pool;
 
+static_assert((size_t)POOL_ROOTS_CAPACITY <= (size_t)INT_MAX, "capacity too large");
 static_assert(sizeof(pool) == POOL_SIZE - sizeof(slot), "bad pool size");
 
 // hot path
@@ -305,7 +307,7 @@ static int validate_pool(pool *pool, int do_capacity)
 {
   // check capacity (needs to be up-to-date)
   if (do_capacity) {
-    size_t i = 0;
+    int i = 0;
     for (; i < POOL_ROOTS_CAPACITY; i++) {
       if (pool->roots[i] == NULL) break;
     }
@@ -314,14 +316,14 @@ static int validate_pool(pool *pool, int do_capacity)
   // check freelist structure and length
   slot *pool_end = &pool->roots[POOL_ROOTS_CAPACITY];
   slot *curr = pool->hd.free_list;
-  size_t length = 0;
+  int length = 0;
   while (curr != pool_end) {
     length++;
     assert(length <= POOL_ROOTS_CAPACITY);
     assert(curr >= pool->roots && curr < pool_end);
     slot s = *curr;
     if (s == NULL) {
-      for (size_t i = curr - pool->roots + 1; i < POOL_ROOTS_CAPACITY; i++) {
+      for (int i = curr - pool->roots + 1; i < POOL_ROOTS_CAPACITY; i++) {
         length++;
         assert(pool->roots[i] == NULL);
       }
@@ -331,8 +333,8 @@ static int validate_pool(pool *pool, int do_capacity)
   }
   assert(length == pool->hd.free_count);
   // check count of allocated elements
-  size_t free_count = POOL_ROOTS_CAPACITY;
-  for(size_t i = 0; i < POOL_ROOTS_CAPACITY; i++) {
+  int free_count = POOL_ROOTS_CAPACITY;
+  for(int i = 0; i < POOL_ROOTS_CAPACITY; i++) {
     slot v = pool->roots[i];
     if (v == NULL) break;
     if (get_pool_header(v) != pool) {
@@ -347,8 +349,8 @@ static int scan_pool(scanning_action action, pool * pool)
   slot *current = pool->roots;
   slot *pool_end = &pool->roots[POOL_ROOTS_CAPACITY];
   /* For DEFRAG */
-  size_t capacity = 0;
-  size_t allocs_to_find = POOL_ROOTS_CAPACITY - pool->hd.free_count;
+  int capacity = 0;
+  int allocs_to_find = POOL_ROOTS_CAPACITY - pool->hd.free_count;
   slot **freelist_last = &pool->hd.free_list;
   slot *freelist_next = NULL;
   for (; current != pool_end; ++current) {
