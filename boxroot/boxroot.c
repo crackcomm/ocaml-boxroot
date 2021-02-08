@@ -24,12 +24,14 @@
 /* Allocate with mmap?
    USE_MMAP requires POOL_SIZE to be equal the OS page size for now. */
 #define USE_MMAP 0
-/* Defrag during scanning?
+/* Defragment during scanning?
    + Better cache locality for successive allocations after lots of
      deallocations.
    + Better impact of bump pointer optimisation on scanning times after
      lots of deallocations.
-   - Scanning more expensive (read-write instead of read-only). */
+   - Scanning is a lot more expensive (read-write instead of read-only).
+   TODO: Option to defragment every X, or find a measure of fragmentation
+   to decide when to defragment. */
 #define DEFRAG 1
 /* DEBUG? (slow) */
 #define DEBUG 0
@@ -99,6 +101,8 @@ static struct {
   int live_pools;
   int peak_pools;
   int ring_operations; // Number of times hd.next is mutated
+  int defrag_sort;
+  int defrag_shorten;
 } stats; // zero-initialized
 
 
@@ -375,6 +379,7 @@ static int scan_pool(scanning_action action, pool * pool)
         for (; current != pool_end; ++current) {
           if (*current == NULL) break;
           *current = NULL;
+          if (PRINT_STATS) ++stats.defrag_shorten;
         }
         break;
       } else {
@@ -383,6 +388,7 @@ static int scan_pool(scanning_action action, pool * pool)
         if (freelist_next == NULL) freelist_last = (slot **)current;
         *current = (slot)freelist_next;
         freelist_next = current;
+        if (PRINT_STATS) ++stats.defrag_sort;
       }
     }
   }
@@ -507,6 +513,11 @@ static void print_stats()
          "ring operations per pool: %d\n",
          stats.ring_operations,
          ring_operations_per_pool);
+
+  printf("defrag (sort): %d\n"
+         "defrag (shorten): %d\n",
+         stats.defrag_sort,
+         stats.defrag_shorten);
 }
 
 // Must be called to set the hook
