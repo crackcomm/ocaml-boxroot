@@ -22,10 +22,10 @@ IMPLEMENTATIONS=\
   ocaml-persistent \
   ocaml-ephemeral \
   gc \
+  boxroots \
   global-roots \
   generational-global-roots \
   fake-boxroots \
-  boxroots \
   $(EMPTY)
 
 run_bench = \
