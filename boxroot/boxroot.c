@@ -85,7 +85,7 @@ struct header {
   struct pool *prev;
   struct pool *next;
   slot *free_list;
-  int free_count;
+  int alloc_count;
   int capacity; /* Number of non-null slots, updated at the end of
                    each scan. */
 };
@@ -279,7 +279,7 @@ static pool * alloc_pool()
   if (out == NULL) return NULL;
 
   out->hd.free_list = out->roots;
-  out->hd.free_count = POOL_ROOTS_CAPACITY;
+  out->hd.alloc_count = 0;
   out->hd.capacity = 0;
   memset(out->roots, 0, sizeof(out->roots));
 
@@ -298,7 +298,7 @@ static pool * get_available_pool(class class)
   pool *start_pool = *pool_ring;
 
   if (start_pool != NULL) {
-    CAMLassert(start_pool->hd.free_count == 0);
+    assert(start_pool->hd.alloc_count == POOL_ROOTS_CAPACITY);
 
     // Find a pool with available slots. TODO: maybe faster lookup by
     // putting the more empty pools in the front during scanning, and/or
@@ -308,7 +308,7 @@ static pool * get_available_pool(class class)
          next_pool != start_pool;
          next_pool = next_pool->hd.next) {
       if (PRINT_STATS) ++stats.get_available_pool_seeking;
-      if (next_pool->hd.free_count > 0) {
+      if (next_pool->hd.alloc_count < POOL_ROOTS_CAPACITY) {
         // Rotate the ring, making the pool with free slots the head
         *pool_ring = next_pool;
         return next_pool;
@@ -327,7 +327,7 @@ static pool * get_available_pool(class class)
 // Free a pool if empty and not the last of its ring.
 static void try_free_pool(pool *p)
 {
-  if (p->hd.free_count != POOL_ROOTS_CAPACITY || p->hd.next == p) return;
+  if (p->hd.alloc_count != 0 || p->hd.next == p) return;
 
   pool *hd = ring_pop(&p);
   if (old_pools == hd) old_pools = p;
@@ -349,7 +349,7 @@ static inline value * freelist_pop(pool *p)
 {
   slot *new_root = p->hd.free_list;
   slot next = *new_root;
-  p->hd.free_count--;
+  p->hd.alloc_count++;
 
   // [new_root] contains either a pointer to the next free slot or
   // NULL. If it is NULL, the next free slot is adjacent to the
@@ -365,7 +365,7 @@ static value * alloc_boxroot_slow(class class)
   CAMLassert(class != UNTRACKED);
   pool *p = get_available_pool(class);
   if (p == NULL) return NULL;
-  CAMLassert(pool_is_available(p));
+  assert(p->hd.alloc_count != POOL_ROOTS_CAPACITY);
   return freelist_pop(p);
 }
 
@@ -378,7 +378,7 @@ static inline value * alloc_boxroot(class class)
   // Test for NULL is necessary here: it is not always possible to
   // allocate the first pool elsewhere, e.g. in scanning functions
   // which must not fail.
-  if (p != NULL && p->hd.free_count != 0) {
+  if (p != NULL && p->hd.alloc_count != POOL_ROOTS_CAPACITY) {
     return freelist_pop(p);
   }
   return alloc_boxroot_slow(class);
@@ -390,7 +390,7 @@ static inline void free_boxroot(value *root)
   pool *p = get_pool_header((slot)root);
   *(slot *)root = p->hd.free_list;
   p->hd.free_list = (slot)root;
-  if (++p->hd.free_count == POOL_ROOTS_CAPACITY) {
+  if (--p->hd.alloc_count == 0) {
     try_free_pool(p);
   }
 }
@@ -432,17 +432,17 @@ static int validate_pool(pool *pool, int do_capacity)
     }
     curr = (slot *)s;
   }
-  assert(length == pool->hd.free_count);
+  assert(length == POOL_ROOTS_CAPACITY - pool->hd.alloc_count);
   // check count of allocated elements
-  int free_count = POOL_ROOTS_CAPACITY;
+  int alloc_count = 0;
   for(int i = 0; i < POOL_ROOTS_CAPACITY; i++) {
     slot v = pool->roots[i];
     if (v == NULL) break;
     if (get_pool_header(v) != pool) {
-      --free_count;
+      ++alloc_count;
     }
   }
-  assert(free_count == pool->hd.free_count);
+  assert(alloc_count == pool->hd.alloc_count);
 }
 
 static int scan_pool(scanning_action action, pool * pool)
@@ -451,7 +451,7 @@ static int scan_pool(scanning_action action, pool * pool)
   slot *pool_end = &pool->roots[POOL_ROOTS_CAPACITY];
   /* For DEFRAG */
   int capacity = 0;
-  int allocs_to_find = POOL_ROOTS_CAPACITY - pool->hd.free_count;
+  int allocs_to_find = pool->hd.alloc_count;
   slot **freelist_last = &pool->hd.free_list;
   slot *freelist_next = NULL;
   for (; current != pool_end; ++current) {
