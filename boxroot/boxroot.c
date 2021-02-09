@@ -117,11 +117,11 @@ static inline pool * get_pool_header(slot v)
 }
 
 // Rings of pools
-static pool *old_pools = NULL; // Contains only roots pointing to
-                               // the major heap
-static pool *young_pools = NULL; // Contains roots pointing to the
-                                 // major or the minor heap
-static pool *free_pools = NULL; // Contains free uninitialized pools
+static struct {
+  pool * old;
+  pool * young;
+  pool * free;
+} pools;
 
 typedef enum class {
   YOUNG,
@@ -240,17 +240,17 @@ static pool * ring_pop(pool **target)
 
 static pool * get_free_pool()
 {
-  if (free_pools != NULL) {
-    return ring_pop(&free_pools);
+  if (pools.free != NULL) {
+    return ring_pop(&pools.free);
   }
   pool *chunk = alloc_chunk();
   if (chunk == NULL) return NULL;
   pool *p;
   for (p = chunk + POOLS_PER_CHUNK - 1; p >= chunk; p--) {
     ring_init(p);
-    ring_concat(p, &free_pools);
+    ring_concat(p, &pools.free);
   }
-  return ring_pop(&free_pools);
+  return ring_pop(&pools.free);
 }
 
 static pool * alloc_pool()
@@ -281,7 +281,7 @@ static pool * get_available_pool(class class)
   // If there was no optimisation for immediates, we could always place
   // the immediates with the old values (be careful about NULL in
   // naked-pointers mode, though).
-  pool **pool_ring = (class == YOUNG) ? &young_pools : &old_pools;
+  pool **pool_ring = (class == YOUNG) ? &pools.young : &pools.old;
   pool *start_pool = *pool_ring;
 
   if (start_pool != NULL) {
@@ -317,12 +317,12 @@ static void try_free_pool(pool *p)
   if (p->hd.alloc_count != 0 || p->hd.next == p) return;
 
   pool *hd = ring_pop(&p);
-  if (old_pools == hd) old_pools = p;
-  else if (young_pools == hd) young_pools = p;
-  assert(hd != free_pools);
+  if (pools.old == hd) pools.old = p;
+  else if (pools.young == hd) pools.young = p;
+  assert(hd != pools.free);
   if (USE_SUPERBLOCK) {
     // TODO: implement reclamation
-    ring_concat(hd, &free_pools);
+    ring_concat(hd, &pools.free);
   } else {
     free_chunk(hd);
   }
@@ -361,7 +361,7 @@ static inline value * alloc_boxroot(class class)
 {
   // TODO Latency: bound the number of young roots alloced at each
   // minor collection by scheduling a minor collection.
-  pool *p = (class == YOUNG) ? young_pools : old_pools;
+  pool *p = (class == YOUNG) ? pools.young : pools.old;
   // Test for NULL is necessary here: it is not always possible to
   // allocate the first pool elsewhere, e.g. in scanning functions
   // which must not fail.
@@ -507,24 +507,24 @@ static int scan_pools(scanning_action action, pool *start_pool)
 static void scan_for_minor(scanning_action action)
 {
   ++stats.minor_collections;
-  if (young_pools == NULL) return;
-  int work = scan_pools(action, young_pools);
+  if (pools.young == NULL) return;
+  int work = scan_pools(action, pools.young);
   stats.total_scanning_work_minor += work;
   // promote minor pools
   pool *new_young_pool = NULL;
-  if ((young_pools->hd.capacity * 100 / POOL_ROOTS_CAPACITY) <=
+  if ((pools.young->hd.capacity * 100 / POOL_ROOTS_CAPACITY) <=
       LOW_CAPACITY_THRESHOLD) {
-    new_young_pool = ring_pop(&young_pools);
+    new_young_pool = ring_pop(&pools.young);
   }
-  ring_concat(young_pools, &old_pools);
-  young_pools = new_young_pool;
+  ring_concat(pools.young, &pools.old);
+  pools.young = new_young_pool;
 }
 
 static void scan_for_major(scanning_action action)
 {
   ++stats.major_collections;
-  int work = scan_pools(action, young_pools);
-  work += scan_pools(action, old_pools);
+  int work = scan_pools(action, pools.young);
+  work += scan_pools(action, pools.old);
   stats.total_scanning_work_major += work;
 }
 
@@ -659,8 +659,8 @@ value boxroot_scan_hook_teardown(value unit)
   caml_scan_roots_hook = boxroot_prev_scan_roots_hook;
   boxroot_prev_scan_roots_hook = NULL;
   if (PRINT_STATS) print_stats();
-  force_free_pools(young_pools);
-  force_free_pools(old_pools);
+  force_free_pools(pools.young);
+  force_free_pools(pools.old);
   return Val_unit;
 }
 
