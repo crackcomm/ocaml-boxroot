@@ -21,7 +21,7 @@
 
 #define POOL_LOG_SIZE 12 // 12 = 4KB
 /* Print statistics on teardown? */
-#define PRINT_STATS 0
+#define PRINT_STATS 1
 /* Allocate with mmap? */
 #define USE_MMAP 0
 /* Advise to use transparent huge pages? (Linux)
@@ -112,10 +112,6 @@ struct header {
   struct pool *next;
   slot *free_list;
   int alloc_count;
-  int last_alloc; /* Index+1 of the last allocation, updated at the
-                     end of each scan. It is no longer in use, but
-                     kept for now in case this provides useful stats
-                     later on. */
 };
 
 #define POOL_ROOTS_CAPACITY                               \
@@ -343,7 +339,6 @@ static pool * alloc_pool()
 
   out->hd.free_list = out->roots;
   out->hd.alloc_count = 0;
-  out->hd.last_alloc = 0;
   slot *end = &out->roots[POOL_ROOTS_CAPACITY];
   slot *s = out->roots;
   while (s < end) {
@@ -457,7 +452,7 @@ static inline void free_boxroot(value *root)
 
 // Scanning
 
-static int validate_pool(pool *pool, int do_last_alloc, int in_young)
+static int validate_pool(pool *pool, int in_young)
 {
   slot *pool_end = &pool->roots[POOL_ROOTS_CAPACITY];
   // check freelist structure and length
@@ -473,19 +468,14 @@ static int validate_pool(pool *pool, int do_last_alloc, int in_young)
   assert(length == POOL_ROOTS_CAPACITY - pool->hd.alloc_count);
   // check count of allocated elements
   int alloc_count = 0;
-  int last_alloc;
   for(int i = 0; i < POOL_ROOTS_CAPACITY; i++) {
     slot v = pool->roots[i];
     if (!is_pool_member(v, pool)) {
       if (!in_young) assert(!is_young((value)v));
       ++alloc_count;
-      last_alloc = i;
     }
   }
   assert(alloc_count == pool->hd.alloc_count);
-  // check capacity (needs to be up-to-date)
-  if (alloc_count == 0) last_alloc = -1;
-  assert(!do_last_alloc || pool->hd.last_alloc == last_alloc);
 }
 
 // sort pool in increasing sequence
@@ -519,7 +509,7 @@ static void defrag_pool(pool * pool)
       }                                                     \
       ++current;                                            \
     }                                                       \
-    pool->hd.last_alloc = current - pool->roots - 1;        \
+    work += current - pool->roots;                          \
   } while (0)
 
 static inline int is_young_member(slot v, pool *p)
@@ -543,7 +533,6 @@ static int scan_pool(scanning_action action, pool * pool)
     // reference implementation
     SCAN_POOL(action, pool);
   }
-  work += pool->hd.last_alloc + 1;
   return work;
 }
 
@@ -552,12 +541,12 @@ static int scan_pools(scanning_action action, pool *start_pool)
   int work = 0;
   if (start_pool == NULL) return work;
   work += scan_pool(action, start_pool);
-  if (DEBUG) validate_pool(start_pool, 1, start_pool == young_pools);
+  if (DEBUG) validate_pool(start_pool, start_pool == young_pools);
   for (pool *pool = start_pool->hd.next;
        pool != start_pool;
        pool = pool->hd.next) {
     work += scan_pool(action, pool);
-    if (DEBUG) validate_pool(pool, 1, start_pool == young_pools);
+    if (DEBUG) validate_pool(pool, start_pool == young_pools);
   }
   return work;
 }
@@ -626,7 +615,7 @@ static void print_stats()
   int freed_mib = kib_of_pools(stats.total_freed_pools, 2);
   int peak_mib = kib_of_pools(stats.peak_pools, 2);
 
-  if (total_scanning_work == 0 && stats.total_alloced_pools == 0)
+  if (total_scanning_work == 0 && stats.total_alloced_pools <= 2)
     return;
 
   printf("POOL_LOG_SIZE: %d (%d KiB, %d roots)\n"
