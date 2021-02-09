@@ -159,19 +159,6 @@ static void *aligned_alloc(size_t alignment, size_t size) {
 }
 #endif
 
-
-static void printbinary(uintptr_t n)
-{
-  printf("\n");
-  for (int i = 63; i >= 0; i--) {
-    if (n & ((uintptr_t)1 << i))
-      printf("1");
-    else
-      printf("0");
-  }
-  printf("\n");
-}
-
 static void * alloc_chunk()
 {
   void *p = NULL;
