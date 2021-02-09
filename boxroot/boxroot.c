@@ -44,14 +44,15 @@
      superblock sizes?). */
 #define USE_SUPERBLOCK 1
 #define SUPERBLOCK_LOG_SIZE 21 // 21 = 2MB (a huge page)
-/* Defragment during scanning?
+/* Defragment during scanning? (disabled for now)
    + Better cache locality for successive allocations after lots of
      deallocations.
-   + Better impact of bump pointer optimisation on scanning times after
-     lots of deallocations.
+   + Improves early exit during scanning after lots of deallocations.
    - Scanning is a lot more expensive (read-write instead of read-only).
-   TODO: Option to defragment every X, or find a measure of fragmentation
-   to decide when to defragment. */
+   TODO:
+    - Implement defrag on compaction
+    - Implement defrag on demotion
+*/
 #define DEFRAG 0
 /* DEBUG? (slow) */
 #define DEBUG 0
@@ -86,8 +87,8 @@ struct header {
   struct pool *next;
   slot *free_list;
   int alloc_count;
-  int capacity; /* Number of non-null slots, updated at the end of
-                   each scan. */
+  int last_alloc; /* Index+1 of the last allocation, updated at the
+                     end of each scan. */
 };
 
 #define POOL_ROOTS_CAPACITY                               \
@@ -145,7 +146,6 @@ static struct {
   int get_available_pool_seeking;
   int ring_operations; // Number of times hd.next is mutated
   int defrag_sort;
-  int defrag_shorten;
 } stats; // zero-initialized
 
 
@@ -267,8 +267,14 @@ static pool * alloc_pool()
 
   out->hd.free_list = out->roots;
   out->hd.alloc_count = 0;
-  out->hd.capacity = 0;
-  memset(out->roots, 0, sizeof(out->roots));
+  out->hd.last_alloc = 0;
+  slot *end = &out->roots[POOL_ROOTS_CAPACITY];
+  slot *s = out->roots;
+  while (s < end) {
+    slot *next = s + 1;
+    *s = next;
+    s = next;
+  }
 
   return out;
 }
@@ -278,9 +284,7 @@ static pool * alloc_pool()
 // a new one failed.
 static pool * get_available_pool(class class)
 {
-  // If there was no optimisation for immediates, we could always place
-  // the immediates with the old values (be careful about NULL in
-  // naked-pointers mode, though).
+  assert(class != UNTRACKED);
   pool **pool_ring = (class == YOUNG) ? &young_pools : &old_pools;
   pool *start_pool = *pool_ring;
 
@@ -335,13 +339,8 @@ static void try_free_pool(pool *p)
 static inline value * freelist_pop(pool *p)
 {
   slot *new_root = p->hd.free_list;
-  slot next = *new_root;
+  p->hd.free_list = (slot *)*new_root;
   p->hd.alloc_count++;
-
-  // [new_root] contains either a pointer to the next free slot or
-  // NULL. If it is NULL, the next free slot is adjacent to the
-  // current one.
-  p->hd.free_list = (next == NULL) ? new_root+1 : (slot *)next;
   return (value *)new_root;
 }
 
@@ -391,18 +390,10 @@ static int is_minor_scanning(scanning_action action)
   return action == &caml_oldify_one;
 }
 
-static int validate_pool(pool *pool, int do_capacity)
+static int validate_pool(pool *pool, int do_last_alloc)
 {
-  // check capacity (needs to be up-to-date)
-  if (do_capacity) {
-    int i = 0;
-    for (; i < POOL_ROOTS_CAPACITY; i++) {
-      if (pool->roots[i] == NULL) break;
-    }
-    assert(pool->hd.capacity == i);
-  }
-  // check freelist structure and length
   slot *pool_end = &pool->roots[POOL_ROOTS_CAPACITY];
+  // check freelist structure and length
   slot *curr = pool->hd.free_list;
   int length = 0;
   while (curr != pool_end) {
@@ -410,83 +401,59 @@ static int validate_pool(pool *pool, int do_capacity)
     assert(length <= POOL_ROOTS_CAPACITY);
     assert(curr >= pool->roots && curr < pool_end);
     slot s = *curr;
-    if (s == NULL) {
-      for (int i = curr - pool->roots + 1; i < POOL_ROOTS_CAPACITY; i++) {
-        length++;
-        assert(pool->roots[i] == NULL);
-      }
-      break;
-    }
     curr = (slot *)s;
   }
   assert(length == POOL_ROOTS_CAPACITY - pool->hd.alloc_count);
   // check count of allocated elements
   int alloc_count = 0;
+  int last_alloc = 0;
   for(int i = 0; i < POOL_ROOTS_CAPACITY; i++) {
-    slot v = pool->roots[i];
-    if (v == NULL) break;
-    if (get_pool_header(v) != pool) {
+    if (get_pool_header(pool->roots[i]) != pool) {
       ++alloc_count;
+      last_alloc = i + 1;
     }
   }
   assert(alloc_count == pool->hd.alloc_count);
+  // check capacity (needs to be up-to-date)
+  assert(!do_last_alloc || pool->hd.last_alloc == last_alloc);
+}
+
+// sort pool in increasing sequence
+static void defrag_pool(pool * pool)
+{
+  slot *current = pool->roots;
+  slot *pool_end = &pool->roots[POOL_ROOTS_CAPACITY];
+  slot **freelist_last = &pool->hd.free_list;
+  for (; current != pool_end; ++current) {
+    slot v = *current;
+    if (get_pool_header(v) != pool) continue;
+    *freelist_last = current;
+    freelist_last = (slot **)current;
+    if (PRINT_STATS) ++stats.defrag_sort;
+  }
+  *freelist_last = pool_end;
 }
 
 static int scan_pool(scanning_action action, pool * pool)
 {
   slot *current = pool->roots;
   slot *pool_end = &pool->roots[POOL_ROOTS_CAPACITY];
-  /* For DEFRAG */
-  int capacity = 0;
   int allocs_to_find = pool->hd.alloc_count;
-  slot **freelist_last = &pool->hd.free_list;
-  slot *freelist_next = NULL;
+  pool->hd.last_alloc = 0;
   for (; current != pool_end; ++current) {
     // hot path
     slot v = *current;
-    if (v == NULL) {
-      // We can skip the rest if the pointer value is NULL.
-      if (DEFRAG && DEBUG) assert(allocs_to_find == 0);
-      break;
-    }
     if (get_pool_header(v) != pool) {
-      // The value is an OCaml block (or possibly an immediate whose
-      // msbs differ from those of [pool], if the immediates
-      // optimisation were to be turned off).
+      // The value is an OCaml block.
       (*action)((value)v, (value *) current);
-      if (DEFRAG && --allocs_to_find == 0) capacity = current - pool->roots + 1;
-    } else if (DEFRAG) {
-      // Current slot is non-allocated (requires optimisation for
-      // immediates to avoid false positives).
-      if (allocs_to_find == 0) {
-        // Past the last allocation: set remaining to zero
-        for (; current != pool_end; ++current) {
-          if (*current == NULL) break;
-          *current = NULL;
-          if (PRINT_STATS) ++stats.defrag_shorten;
-        }
-        break;
-      } else {
-        // An element of the freelist. Sort the freelist and record
-        // the freelist_last.
-        if (freelist_next == NULL) freelist_last = (slot **)current;
-        *current = (slot)freelist_next;
-        freelist_next = current;
-        if (PRINT_STATS) ++stats.defrag_sort;
+      if (--allocs_to_find == 0) {
+        int work = current - pool->roots;
+        pool->hd.last_alloc = work + 1;
+        return work;
       }
     }
   }
-  int work = current - pool->roots;
-  if (DEFRAG) {
-    // Now we know what is the first element of the freelist and where
-    // last element of the freelist points.
-    pool->hd.free_list = freelist_next;
-    *freelist_last = &pool->roots[capacity];
-    pool->hd.capacity = capacity;
-  } else {
-    pool->hd.capacity = current - pool->roots;
-  }
-  return work;
+  return POOL_ROOTS_CAPACITY;
 }
 
 static int scan_pools(scanning_action action, pool *start_pool)
@@ -512,8 +479,7 @@ static void scan_for_minor(scanning_action action)
   stats.total_scanning_work_minor += work;
   // promote minor pools
   pool *new_young_pool = NULL;
-  if ((young_pools->hd.capacity * 100 / POOL_ROOTS_CAPACITY) <=
-      LOW_CAPACITY_THRESHOLD) {
+  if ((young_pools->hd.last_alloc * 100 / POOL_ROOTS_CAPACITY) <=      LOW_CAPACITY_THRESHOLD) {
     new_young_pool = ring_pop(&young_pools);
   }
   ring_concat(young_pools, &old_pools);
@@ -625,10 +591,8 @@ static void print_stats()
          stats.ring_operations,
          ring_operations_per_pool);
 
-  printf("defrag (sort): %d\n"
-         "defrag (shorten): %d\n",
-         stats.defrag_sort,
-         stats.defrag_shorten);
+  printf("defrag (sort): %d\n",
+         stats.defrag_sort);
 }
 
 // Must be called to set the hook
@@ -669,8 +633,8 @@ value boxroot_scan_hook_teardown(value unit)
 // hot path
 static inline class classify_value(value v)
 {
-  if(v == 0 || !Is_block(v)) return UNTRACKED;
-  if(Is_young(v)) return YOUNG;
+  if (!Is_block(v)) return UNTRACKED;
+  if (Is_young(v)) return YOUNG;
   return OLD;
 }
 
