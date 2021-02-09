@@ -349,7 +349,7 @@ static inline value * freelist_pop(pool *p)
 // allocate from it.
 static value * alloc_boxroot_slow(class class)
 {
-  CAMLassert(class != UNTRACKED);
+  assert(class != UNTRACKED);
   pool *p = get_available_pool(class);
   if (p == NULL) return NULL;
   assert(p->hd.alloc_count != POOL_ROOTS_CAPACITY);
@@ -705,7 +705,6 @@ boxroot boxroot_create(value init)
 
 value const * boxroot_get(boxroot root)
 {
-  CAMLassert (root);
   return (value *)root;
 }
 
@@ -723,13 +722,13 @@ static inline void boxroot_delete_classified(boxroot root, class class)
 
 void boxroot_delete(boxroot root)
 {
-  CAMLassert(root);
+  assert(root);
   boxroot_delete_classified(root, classify_boxroot(root));
 }
 
 void boxroot_modify(boxroot *root, value new_value)
 {
-  CAMLassert(*root);
+  assert(*root);
   if (PRINT_STATS) ++stats.total_modify;
   class old_class = classify_boxroot(*root);
   class new_class = classify_value(new_value);
