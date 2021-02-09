@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <limits.h>
 #include <stdarg.h>
 #include <stddef.h>
@@ -7,17 +8,20 @@
 #include <string.h>
 #include <unistd.h>
 
+#define CAML_NAME_SPACE
 #define CAML_INTERNALS
 
 #include "boxroot.h"
 #include <caml/roots.h>
 #include <caml/minor_gc.h>
+#include <caml/major_gc.h>
+#include <caml/compact.h>
 
 // Options
 
-#define POOL_LOG_SIZE 15 // 12 = 4KB
+#define POOL_LOG_SIZE 12 // 12 = 4KB
 /* Print statistics on teardown? */
-#define PRINT_STATS 1
+#define PRINT_STATS 0
 /* Allocate with mmap? */
 #define USE_MMAP 0
 /* Advise to use transparent huge pages? (Linux)
@@ -54,15 +58,19 @@
 /* Check integrity of pool structure after each scan? (slow) */
 #define DEBUG 0
 /* Use __builtin_expect in hot paths? (suggested by suggested by
-   looking at the generated assembly in godbolt) */
+   looking at the generated assembly in godbolt)
+   0 = off
+   1 = on
+   2 = invert
+ */
 #define WITH_EXPECT 1
+/* Trades a few occasional segfaults for a faster test of membership
+   to the minor heap. */
+#define FAST_IS_YOUNG 0
+
+// end of options
 
 // Setup
-
-#if DEBUG == 0
-  #define NDEBUG
-#endif
-#include <assert.h>
 
 // for MADV_HUGEPAGE
 #define HUGEPAGE_LOG_SIZE 21 // 2MB on x86_64 Linux
@@ -70,12 +78,15 @@
   #include <sys/mman.h>
 #endif
 
-#if WITH_EXPECT != 0
-  #define LIKELY(a) __builtin_expect(a,1)
-  #define UNLIKELY(a) __builtin_expect(a,0)
-#else
+#if WITH_EXPECT == 0
   #define LIKELY(a) (a)
   #define UNLIKELY(a) (a)
+#elif WITH_EXPECT == 1
+  #define LIKELY(a) __builtin_expect(!!(a),1)
+  #define UNLIKELY(a) __builtin_expect(!!(a),0)
+#elif WITH_EXPECT == 2
+  #define LIKELY(a) __builtin_expect(!!(a),0)
+  #define UNLIKELY(a) __builtin_expect(!!(a),1)
 #endif
 
 #define CHUNK_LOG_SIZE (USE_SUPERBLOCK ? SUPERBLOCK_LOG_SIZE : POOL_LOG_SIZE)
@@ -113,7 +124,7 @@ struct header {
    in the freelist to denote the last element of the freelist,
    starting from after releasing from a full pool for the first
    time. To ensure that this value is recognised by the test
-   [get_pool_header(v) == pool], we subtract one from the capacity. */
+   [is_pool_member(v, pool)], we subtract one from the capacity. */
 
 typedef struct pool {
   struct header hd;
@@ -133,6 +144,12 @@ static inline pool * get_pool_header(slot v)
   return (pool *)((uintptr_t)v & ~((uintptr_t)POOL_SIZE - 1));
 }
 
+// hot path
+static inline int is_pool_member(slot v, pool *p)
+{
+  return get_pool_header(v) == p;
+}
+
 #define POOL_BITMASK ((uintptr_t)(POOL_SIZE - sizeof(slot)))
 
 /*
@@ -147,6 +164,27 @@ static void printbinary(uintptr_t n)
   }
   printf("\n");
 }*/
+
+#define YOUNG_MASK (~(((uintptr_t)1 << 22) - 1))
+
+static uintptr_t young_mask_value = 0;
+
+// hot path
+static inline int is_young(value v)
+{
+#if FAST_IS_YOUNG
+  return ((uintptr_t)v & YOUNG_MASK) == young_mask_value;
+#else
+  return Is_young(v);
+#endif
+}
+
+static void init_young_mask()
+{
+  young_mask_value = (uintptr_t)caml_young_start & YOUNG_MASK;
+  assert(is_young((value)(caml_young_start + 1)));
+  assert(is_young((value)(caml_young_end - 1)));
+}
 
 // hot path
 static inline int is_last_elem(slot *v)
@@ -419,14 +457,7 @@ static inline void free_boxroot(value *root)
 
 // Scanning
 
-static void (*boxroot_prev_scan_roots_hook)(scanning_action);
-
-static int is_minor_scanning(scanning_action action)
-{
-  return action == &caml_oldify_one;
-}
-
-static int validate_pool(pool *pool, int do_last_alloc)
+static int validate_pool(pool *pool, int do_last_alloc, int in_young)
 {
   slot *pool_end = &pool->roots[POOL_ROOTS_CAPACITY];
   // check freelist structure and length
@@ -442,15 +473,18 @@ static int validate_pool(pool *pool, int do_last_alloc)
   assert(length == POOL_ROOTS_CAPACITY - pool->hd.alloc_count);
   // check count of allocated elements
   int alloc_count = 0;
-  int last_alloc = 0;
+  int last_alloc;
   for(int i = 0; i < POOL_ROOTS_CAPACITY; i++) {
-    if (get_pool_header(pool->roots[i]) != pool) {
+    slot v = pool->roots[i];
+    if (!is_pool_member(v, pool)) {
+      if (!in_young) assert(!is_young((value)v));
       ++alloc_count;
-      last_alloc = i + 1;
+      last_alloc = i;
     }
   }
   assert(alloc_count == pool->hd.alloc_count);
   // check capacity (needs to be up-to-date)
+  if (alloc_count == 0) last_alloc = -1;
   assert(!do_last_alloc || pool->hd.last_alloc == last_alloc);
 }
 
@@ -462,7 +496,7 @@ static void defrag_pool(pool * pool)
   slot **freelist_last = &pool->hd.free_list;
   for (; current != pool_end; ++current) {
     slot v = *current;
-    if (get_pool_header(v) != pool) continue;
+    if (!is_pool_member(v, pool)) continue;
     *freelist_last = current;
     freelist_last = (slot **)current;
     if (PRINT_STATS) ++stats.defrag_sort;
@@ -470,26 +504,47 @@ static void defrag_pool(pool * pool)
   *freelist_last = pool_end;
 }
 
+#define MINOR_SCANNING_ACTION caml_oldify_one
+#define MAJOR_SCANNING_ACTION caml_darken
+#define COMPACT_SCANNING_ACTION caml_invert_root
+
+#define SCAN_POOL(action, pool) do {                        \
+    int allocs_to_find = pool->hd.alloc_count;              \
+    slot *current = pool->roots;                            \
+    while (allocs_to_find) {                                \
+      slot v = *current;                                    \
+      if ((!is_pool_member(v, pool))) {                     \
+        action((value)v, (value *) current);                \
+        --allocs_to_find;                                   \
+      }                                                     \
+      ++current;                                            \
+    }                                                       \
+    pool->hd.last_alloc = current - pool->roots - 1;        \
+  } while (0)
+
+static inline int is_young_member(slot v, pool *p)
+{
+  return is_young((value)v);
+}
+
+// returns the amount of work done
 static int scan_pool(scanning_action action, pool * pool)
 {
-  slot *current = pool->roots;
-  slot *pool_end = &pool->roots[POOL_ROOTS_CAPACITY];
-  int allocs_to_find = pool->hd.alloc_count;
-  pool->hd.last_alloc = 0;
-  for (; current != pool_end; ++current) {
-    // hot path
-    slot v = *current;
-    if (LIKELY(get_pool_header(v) != pool)) {
-      // The value is an OCaml block.
-      (*action)((value)v, (value *) current);
-      if (UNLIKELY(--allocs_to_find == 0)) {
-        int work = current - pool->roots;
-        pool->hd.last_alloc = work + 1;
-        return work;
-      }
-    }
+  int work = 0;
+  if (action == &COMPACT_SCANNING_ACTION) {
+    defrag_pool(pool);
+    work += POOL_ROOTS_CAPACITY;
   }
-  return POOL_ROOTS_CAPACITY;
+  if (action == &MINOR_SCANNING_ACTION) {
+    SCAN_POOL(MINOR_SCANNING_ACTION, pool);
+  } else if (action == &MAJOR_SCANNING_ACTION) {
+    SCAN_POOL(MAJOR_SCANNING_ACTION, pool);
+  } else {
+    // reference implementation
+    SCAN_POOL(action, pool);
+  }
+  work += pool->hd.last_alloc + 1;
+  return work;
 }
 
 static int scan_pools(scanning_action action, pool *start_pool)
@@ -497,12 +552,12 @@ static int scan_pools(scanning_action action, pool *start_pool)
   int work = 0;
   if (start_pool == NULL) return work;
   work += scan_pool(action, start_pool);
-  if (DEBUG) validate_pool(start_pool, 1);
+  if (DEBUG) validate_pool(start_pool, 1, start_pool == young_pools);
   for (pool *pool = start_pool->hd.next;
        pool != start_pool;
        pool = pool->hd.next) {
     work += scan_pool(action, pool);
-    if (DEBUG) validate_pool(pool, 1);
+    if (DEBUG) validate_pool(pool, 1, start_pool == young_pools);
   }
   return work;
 }
@@ -519,7 +574,7 @@ static void scan_for_minor(scanning_action action)
   young_pools = new_young_pool;
 }
 
-static void scan_for_major(scanning_action action)
+static void scan_all(scanning_action action)
 {
   ++stats.major_collections;
   int work = scan_pools(action, young_pools);
@@ -527,12 +582,14 @@ static void scan_for_major(scanning_action action)
   stats.total_scanning_work_major += work;
 }
 
+static void (*boxroot_prev_scan_roots_hook)(scanning_action);
+
 static void boxroot_scan_roots(scanning_action action)
 {
-  if (is_minor_scanning(action)) {
+  if (action == &MINOR_SCANNING_ACTION) {
     scan_for_minor(action);
   } else {
-    scan_for_major(action);
+    scan_all(action);
   }
   if (boxroot_prev_scan_roots_hook != NULL) {
     (*boxroot_prev_scan_roots_hook)(action);
@@ -635,6 +692,7 @@ value boxroot_scan_hook_setup(value unit)
   caml_scan_roots_hook = boxroot_scan_roots;
   young_pools = alloc_pool();
   old_pools = alloc_pool();
+  init_young_mask();
   return Val_unit;
 }
 
@@ -669,7 +727,7 @@ value boxroot_scan_hook_teardown(value unit)
 static inline class classify_value(value v)
 {
   if (!Is_block(v)) return UNTRACKED;
-  if (Is_young(v)) return YOUNG;
+  if (is_young(v)) return YOUNG;
   return OLD;
 }
 
@@ -717,29 +775,31 @@ static inline void boxroot_delete_classified(boxroot root, class class)
   }
 }
 
+// hot path
 void boxroot_delete(boxroot root)
 {
   assert(root);
   boxroot_delete_classified(root, classify_boxroot(root));
 }
 
-void boxroot_modify(boxroot *root, value new_value)
+// hot path
+void boxroot_modify(boxroot *root_ref, value new_value)
 {
-  assert(*root);
+  boxroot root = *root_ref;
+  assert(root);
   if (PRINT_STATS) ++stats.total_modify;
-  class old_class = classify_boxroot(*root);
+  class old_class = classify_boxroot(root);
   class new_class = classify_value(new_value);
 
   if (old_class == new_class
       || (old_class == YOUNG && new_class == OLD)) {
     // No need to reallocate
-    value *cell = (value *)*root;
-    *cell = new_value;
+    *(value *)root = new_value;
     return;
   }
 
-  boxroot_delete_classified(*root, old_class);
-  *root = boxroot_create_classified(new_value, new_class);
-  // Note: *root can be NULL, which must be checked (in Rust, check
-  // and panic here).
+  boxroot_delete_classified(root, old_class);
+  *root_ref = boxroot_create_classified(new_value, new_class);
+  // Note: *root_ref can become NULL, which must be checked (in Rust,
+  // check and panic here).
 }
