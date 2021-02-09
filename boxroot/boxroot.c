@@ -17,8 +17,6 @@
 // Options
 
 #define POOL_LOG_SIZE 15 // 12 = 4KB
-#define LOW_CAPACITY_THRESHOLD 50 /* 50% capacity before promoting a
-                                     young pool. */
 /* Print statistics on teardown? */
 #define PRINT_STATS 1
 /* Allocate with mmap? */
@@ -100,7 +98,9 @@ struct header {
   slot *free_list;
   int alloc_count;
   int last_alloc; /* Index+1 of the last allocation, updated at the
-                     end of each scan. */
+                     end of each scan. It is no longer in use, but
+                     kept for now in case this provides useful stats
+                     later on. */
 };
 
 #define POOL_ROOTS_CAPACITY                               \
@@ -151,10 +151,11 @@ static inline int is_last_elem(slot *v)
 }
 
 // Rings of pools
-static pool *old_pools = NULL; // Contains only roots pointing to
-                               // the major heap
+static pool *old_pools = NULL; // Contains only roots pointing to the
+                               // major heap. Never NULL.
 static pool *young_pools = NULL; // Contains roots pointing to the
-                                 // major or the minor heap
+                                 // major or the minor heap. Never
+                                 // NULL.
 static pool *free_pools = NULL; // Contains free uninitialized pools
 
 typedef enum class {
@@ -375,10 +376,6 @@ static inline value * alloc_boxroot(class class)
 {
   if (DEBUG) assert(class != UNTRACKED);
   pool *p = (class == YOUNG) ? young_pools : old_pools;
-  // Test for NULL is necessary here: it is not always possible to
-  // allocate the first pool elsewhere, e.g. in scanning functions
-  // which must not fail. TODO: remove
-  if (UNLIKELY(p == NULL)) goto slow;
   slot * new_root = p->hd.free_list;
   if (DEBUG) {
     int a = new_root != &p->roots[POOL_ROOTS_CAPACITY];
@@ -391,8 +388,6 @@ static inline value * alloc_boxroot(class class)
     p->hd.alloc_count++;
     return (value *)new_root;
   }
-  // fall through
-slow:
   return alloc_boxroot_slow(class);
 }
 
@@ -401,7 +396,6 @@ static value * alloc_boxroot_slow(class class)
 {
   // TODO Latency: bound the number of young roots alloced at each
   // minor collection by scheduling a minor collection.
-  assert(class != UNTRACKED);
   pool *p = get_available_pool(class);
   if (p == NULL) return NULL;
 //  assert(!is_last_elem(p->hd.free_list));
@@ -516,10 +510,7 @@ static void scan_for_minor(scanning_action action)
   int work = scan_pools(action, young_pools);
   stats.total_scanning_work_minor += work;
   // promote minor pools
-  pool *new_young_pool = NULL;
-  if ((young_pools->hd.last_alloc * 100 / POOL_ROOTS_CAPACITY) <=      LOW_CAPACITY_THRESHOLD) {
-    new_young_pool = ring_pop(&young_pools);
-  }
+  pool *new_young_pool = ring_pop(&young_pools);
   ring_concat(young_pools, &old_pools);
   young_pools = new_young_pool;
 }
@@ -578,7 +569,6 @@ static void print_stats()
     return;
 
   printf("POOL_LOG_SIZE: %d (%d KiB, %d roots)\n"
-         "LOW_CAPACITY_THRESHOLD: %d%%\n"
          "USE_MMAP: %d\n"
          "USE_MADV_HUGEPAGE: %d\n"
          "USE_SUPERBLOCK: %d\n"
@@ -586,7 +576,6 @@ static void print_stats()
          "DEFRAG: %d\n"
          "DEBUG: %d\n",
          (int)POOL_LOG_SIZE, kib_of_pools((int)1, 1), (int)POOL_ROOTS_CAPACITY,
-         (int)LOW_CAPACITY_THRESHOLD,
          (int)USE_MMAP,
          (int)USE_MADV_HUGEPAGE,
          (int)USE_SUPERBLOCK,
@@ -638,6 +627,8 @@ value boxroot_scan_hook_setup(value unit)
 {
   boxroot_prev_scan_roots_hook = caml_scan_roots_hook;
   caml_scan_roots_hook = boxroot_scan_roots;
+  young_pools = alloc_pool();
+  old_pools = alloc_pool();
   return Val_unit;
 }
 
