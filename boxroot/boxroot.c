@@ -1,4 +1,3 @@
-#include <assert.h>
 #include <limits.h>
 #include <stdarg.h>
 #include <stddef.h>
@@ -59,6 +58,11 @@
 #define WITH_EXPECT 1
 
 // Setup
+
+#if DEBUG == 0
+  #define NDEBUG
+#endif
+#include <assert.h>
 
 // for MADV_HUGEPAGE
 #define HUGEPAGE_LOG_SIZE 21 // 2MB on x86_64 Linux
