@@ -54,8 +54,13 @@
     - Implement defrag on demotion
 */
 #define DEFRAG 0
-/* DEBUG? (slow) */
+/* Check integrity of pool structure after each scan? (slow) */
 #define DEBUG 0
+/* Use __builtin_expect in hot paths? (suggested by suggested by
+   looking at the generated assembly in godbolt) */
+#define WITH_EXPECT 1
+
+// Setup
 
 // for MADV_HUGEPAGE
 #define HUGEPAGE_LOG_SIZE 21 // 2MB on x86_64 Linux
@@ -63,8 +68,13 @@
   #include <sys/mman.h>
 #endif
 
-
-// Data types
+#if WITH_EXPECT != 0
+  #define LIKELY(a) __builtin_expect(a,1)
+  #define UNLIKELY(a) __builtin_expect(a,0)
+#else
+  #define LIKELY(a) (a)
+  #define UNLIKELY(a) (a)
+#endif
 
 #define CHUNK_LOG_SIZE (USE_SUPERBLOCK ? SUPERBLOCK_LOG_SIZE : POOL_LOG_SIZE)
 
@@ -79,6 +89,8 @@ static_assert(!USE_MADV_HUGEPAGE || CHUNK_LOG_SIZE >= HUGEPAGE_LOG_SIZE,
   ((USE_MADV_HUGEPAGE && POOL_LOG_SIZE < HUGEPAGE_LOG_SIZE) ?   \
    ((size_t)1 << HUGEPAGE_LOG_SIZE) : POOL_SIZE)
 #define POOLS_PER_CHUNK (CHUNK_SIZE / POOL_SIZE)
+
+// Data types
 
 typedef void * slot;
 
@@ -115,6 +127,27 @@ static_assert(sizeof(pool) == POOL_SIZE, "bad pool size");
 static inline pool * get_pool_header(slot v)
 {
   return (pool *)((uintptr_t)v & ~((uintptr_t)POOL_SIZE - 1));
+}
+
+#define POOL_BITMASK ((uintptr_t)(POOL_SIZE - sizeof(slot)))
+
+/*
+static void printbinary(uintptr_t n)
+{
+  printf("\n");
+  for (int i = 63; i >= 0; i--) {
+    if (n & ((uintptr_t)1 << i))
+      printf("1");
+    else
+      printf("0");
+  }
+  printf("\n");
+}*/
+
+// hot path
+static inline int is_last_elem(slot *v)
+{
+  return ((uintptr_t)v & POOL_BITMASK) == POOL_BITMASK;
 }
 
 // Rings of pools
@@ -335,39 +368,44 @@ static void try_free_pool(pool *p)
 
 // Allocation, deallocation
 
-// hot path
-static inline value * freelist_pop(pool *p)
-{
-  slot *new_root = p->hd.free_list;
-  p->hd.free_list = (slot *)*new_root;
-  p->hd.alloc_count++;
-  return (value *)new_root;
-}
-
-// slow path: Place an available pool in front of the ring and
-// allocate from it.
-static value * alloc_boxroot_slow(class class)
-{
-  assert(class != UNTRACKED);
-  pool *p = get_available_pool(class);
-  if (p == NULL) return NULL;
-  assert(p->hd.alloc_count != POOL_ROOTS_CAPACITY);
-  return freelist_pop(p);
-}
+static value * alloc_boxroot_slow(class class);
 
 // hot path
 static inline value * alloc_boxroot(class class)
 {
-  // TODO Latency: bound the number of young roots alloced at each
-  // minor collection by scheduling a minor collection.
+  if (DEBUG) assert(class != UNTRACKED);
   pool *p = (class == YOUNG) ? young_pools : old_pools;
   // Test for NULL is necessary here: it is not always possible to
   // allocate the first pool elsewhere, e.g. in scanning functions
-  // which must not fail.
-  if (p != NULL && p->hd.alloc_count != POOL_ROOTS_CAPACITY) {
-    return freelist_pop(p);
+  // which must not fail. TODO: remove
+  if (UNLIKELY(p == NULL)) goto slow;
+  slot * new_root = p->hd.free_list;
+  if (DEBUG) {
+    int a = new_root != &p->roots[POOL_ROOTS_CAPACITY];
+    int b = !is_last_elem(new_root);
+    int c = p->hd.alloc_count != POOL_ROOTS_CAPACITY;
+    assert(a == b && b == c);
   }
+  if (LIKELY(!is_last_elem(new_root))) {
+    p->hd.free_list = (slot *)*new_root;
+    p->hd.alloc_count++;
+    return (value *)new_root;
+  }
+  // fall through
+slow:
   return alloc_boxroot_slow(class);
+}
+
+// Place an available pool in front of the ring and allocate from it.
+static value * alloc_boxroot_slow(class class)
+{
+  // TODO Latency: bound the number of young roots alloced at each
+  // minor collection by scheduling a minor collection.
+  assert(class != UNTRACKED);
+  pool *p = get_available_pool(class);
+  if (p == NULL) return NULL;
+//  assert(!is_last_elem(p->hd.free_list));
+  return alloc_boxroot(class);
 }
 
 // hot path
@@ -376,7 +414,7 @@ static inline void free_boxroot(value *root)
   pool *p = get_pool_header((slot)root);
   *(slot *)root = p->hd.free_list;
   p->hd.free_list = (slot)root;
-  if (--p->hd.alloc_count == 0) {
+  if (UNLIKELY(--p->hd.alloc_count == 0)) {
     try_free_pool(p);
   }
 }
@@ -443,10 +481,10 @@ static int scan_pool(scanning_action action, pool * pool)
   for (; current != pool_end; ++current) {
     // hot path
     slot v = *current;
-    if (get_pool_header(v) != pool) {
+    if (LIKELY(get_pool_header(v) != pool)) {
       // The value is an OCaml block.
       (*action)((value)v, (value *) current);
-      if (--allocs_to_find == 0) {
+      if (UNLIKELY(--allocs_to_find == 0)) {
         int work = current - pool->roots;
         pool->hd.last_alloc = work + 1;
         return work;
@@ -649,7 +687,7 @@ static inline boxroot boxroot_create_classified(value init, class class)
 {
   if (PRINT_STATS) ++stats.total_create;
   value *cell;
-  if (class != UNTRACKED) {
+  if (LIKELY(class != UNTRACKED)) {
     cell = alloc_boxroot(class);
   } else {
     // [init] can be null in naked-pointers mode, handled here.
@@ -658,7 +696,7 @@ static inline boxroot boxroot_create_classified(value init, class class)
     // very small values of [init] — for fast variants and and to
     // handle C-side NULLs in no-naked-pointers mode if desired.
   }
-  if (cell != NULL) *cell = init;
+  if (LIKELY(cell != NULL)) *cell = init;
   return (boxroot)cell;
 }
 
@@ -677,7 +715,7 @@ static inline void boxroot_delete_classified(boxroot root, class class)
 {
   if (PRINT_STATS) ++stats.total_delete;
   value *cell = (value *)root;
-  if (class != UNTRACKED) {
+  if (LIKELY(class != UNTRACKED)) {
     free_boxroot(cell);
   } else {
     free(cell);
