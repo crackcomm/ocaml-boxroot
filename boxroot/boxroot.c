@@ -402,7 +402,7 @@ static value * alloc_boxroot_slow(class class)
   // minor collection by scheduling a minor collection.
   pool *p = get_available_pool(class);
   if (p == NULL) return NULL;
-//  assert(!is_last_elem(p->hd.free_list));
+  assert(!is_last_elem(p->hd.free_list));
   return alloc_boxroot(class);
 }
 
@@ -578,14 +578,16 @@ static void print_stats()
          "USE_SUPERBLOCK: %d\n"
          "SUPERBLOCK_LOG_SIZE: %d\n"
          "DEFRAG: %d\n"
-         "DEBUG: %d\n",
+         "DEBUG: %d\n"
+         "WITH_EXPECT: %d\n",
          (int)POOL_LOG_SIZE, kib_of_pools((int)1, 1), (int)POOL_ROOTS_CAPACITY,
          (int)USE_MMAP,
          (int)USE_MADV_HUGEPAGE,
          (int)USE_SUPERBLOCK,
          (int)SUPERBLOCK_LOG_SIZE,
          (int)DEFRAG,
-         (int)DEBUG);
+         (int)DEBUG,
+         (int)WITH_EXPECT);
 
   printf("CHUNK_SIZE: %d kiB (%d pools)\n"
          "CHUNK_ALIGNMENT: %d kiB\n"
@@ -685,11 +687,9 @@ static inline boxroot boxroot_create_classified(value init, class class)
   if (LIKELY(class != UNTRACKED)) {
     cell = alloc_boxroot(class);
   } else {
-    // [init] can be null in naked-pointers mode, handled here.
     cell = (value *) malloc(sizeof(value));
     // TODO: further optim: use a global table instead of malloc for
-    // very small values of [init] — for fast variants and and to
-    // handle C-side NULLs in no-naked-pointers mode if desired.
+    // very small values of [init] for fast variants.
   }
   if (LIKELY(cell != NULL)) *cell = init;
   return (boxroot)cell;
