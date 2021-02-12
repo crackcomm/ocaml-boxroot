@@ -11,5 +11,5 @@ build:
       - bench-log.txt
 
   script:
-    - make
+    - make all
     - make run | tee bench-log.txt
