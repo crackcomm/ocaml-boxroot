@@ -85,16 +85,17 @@ show-deps:
 .PRECIOUS: _build/%.c _build/%.h _build/%.ml
 _build/%.c: %.c
 	@mkdir -p $(shell dirname ./$@)
-	cp $< $@
+	echo '#line 1 "$<"' | cat - $< > $@
 
 _build/%.h: %.h
 	@mkdir -p $(shell dirname ./$@)
-	cp $< $@
+	echo '#line 1 "$<"' | cat - $< > $@
 
 _build/%.ml: %.ml
 	@mkdir -p $(shell dirname ./$@)
-	cp $< $@
+	echo '#0 "$<"' | cat - $< > $@
 
+# build rules
 %.cmx: %.ml
 	@mkdir -p $(shell dirname ./$@)
 	ocamlopt $(INCLUDE_LIB_DIRS) -g -c $< -o $@
@@ -103,4 +104,6 @@ _build/%.ml: %.ml
 # (-c and -o together are rejected)
 .SECONDARY: $(C_HEADERS)
 %.o: %.c $(C_HEADERS)
-	$(shell ocamlopt -config-var native_c_compiler) -g -I'$(shell ocamlopt -where)' -I_build -I$(shell dirname $<) -c $< -o $@
+	$(shell ocamlopt -config-var native_c_compiler) -g \
+	  -I'$(shell ocamlopt -where)' -I_build -I$(shell dirname $<) \
+	  -c $< -o $@
