@@ -1,8 +1,8 @@
 # Entry points
 
-BENCHMARKS = $(addprefix ,\
-  perm_count.bench \
-  synthetic.bench \
+BENCHMARKS = $(addprefix benchmarks/,\
+  perm_count.exe \
+  synthetic.exe \
 )
 
 .PHONY: entry
@@ -16,7 +16,7 @@ entry:
 all: $(BENCHMARKS)
 	@echo "Available benchmarks:" $(BENCHMARKS)
 
-%.bench: _build/%.exe
+benchmarks/%.exe: _build/benchmarks/%.exe
 	cp $< $@
 
 EMPTY=
@@ -37,7 +37,7 @@ run_bench = \
 
 .PHONY: run
 run: $(BENCHMARKS)
-	$(call run_bench,./perm_count.bench,10)
+	$(call run_bench,benchmarks/perm_count.exe,10)
 # Note: synthetic.bench is not run by default, it is too experimental for now.
 
 .PHONY: test-boxroot
@@ -51,13 +51,13 @@ clean:
 
 # Build rules
 
-C_HEADERS=$(addprefix _build/,$(wildcard boxroot/*.h choice/*.h))
+C_HEADERS=$(addprefix _build/,$(wildcard boxroot/*.h benchmarks/lib-choice/*.h))
 
 BOXROOT_LIB = $(addprefix _build/boxroot/,\
   boxroot.o \
 )
 
-CHOICE_MODULES = $(addprefix _build/choice/,\
+CHOICE_MODULES = $(addprefix _build/benchmarks/lib-choice/,\
   choice_ocaml_persistent.cmx \
   choice_ocaml_ephemeral.cmx \
   abstract_value.o \
@@ -69,7 +69,7 @@ CHOICE_MODULES = $(addprefix _build/choice/,\
   config.cmx \
 )
 
-LIB_DIRS=boxroot choice
+LIB_DIRS=boxroot benchmarks/lib-choice
 INCLUDE_LIB_DIRS=$(foreach DIR,$(LIB_DIRS), -I _build/$(DIR))
 
 # for debugging
@@ -81,8 +81,8 @@ show-deps:
 	@mkdir -p $(shell dirname ./$@)
 	ocamlopt -runtime-variant i $(INCLUDE_LIB_DIRS) -g -o $@ $^
 # see http://www.gnu.org/software/make/manual/html_node/Chained-Rules.html
+.PRECIOUS: %.exe %.cmx
 .SECONDARY: $(BOXROOT_LIB) $(CHOICE_MODULES)
-.PRECIOUS: %.cmx
 
 # copy rules
 .PRECIOUS: _build/%.c _build/%.h _build/%.ml
