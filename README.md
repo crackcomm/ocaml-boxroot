@@ -2,7 +2,7 @@
 
 This repository hosts an experiment with a different root-registration
 API for the OCaml garbage collector. The new kind of roots are called
-"boxroot" (inspired by the `Box<T>` type of Rust).
+"boxroot" (the name is suggested by the `Box<T>` type of Rust).
 
 The traditional root-registration APIs let users decide which existing
 parts of memory should be considered as new roots by the runtime. With
