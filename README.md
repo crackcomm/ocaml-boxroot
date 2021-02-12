@@ -1,4 +1,34 @@
-## Benchmarking OCaml GC root registration
+# Experimenting with OCaml GC root registration
+
+This repository hosts an experiment with a different root-registration
+API for the OCaml garbage collector. The new kind of roots are called
+"boxroot" (inspired by the `Box<T>` type of Rust).
+
+The traditional root-registration APIs let users decide which existing
+parts of memory should be considered as new roots by the runtime. With
+boxroots, it is the runtime, not the user, that decides where to these
+roots are placed in memory. This extra flexibility should allow for
+a more efficient implementaion.
+
+We provide an implementation of this idea as a standalone library
+(`boxroot/` in this repository), using OCaml's GC scanning hooks. Due
+to limitations of the hook interface, there are aspects of the
+implementation that we cannot control as we would like (in particular,
+we cannot support incremental scanning of major-heap hooks), but our
+prototype performance is already promising.
+
+
+Note: our prototype library uses `aligned_alloc`, which might limit
+its portability on some systems. (On OSX we reimplement the missing
+`aligned_alloc` on top of `posix_memalign`, but some systems may lack
+`posix_memalign`.)
+
+## Benchmarks
+
+To evaluate our experiment, we run various allocation-heavy
+benchmarks.
+
+### Permutations of a list
 
 The small program used in this benchmark computes the set of all
 permutations of the list [0; ..; n-1], using a non-determinism monad
@@ -9,7 +39,7 @@ A reference implementation in OCaml is provided, but point is to
 implement the non-determinism monad list in C, with each element of
 the list registered as a root to the OCaml GC.
 
-## Implementations
+#### Implementations
 
 Currently we have implemented:
 - `choice_ocaml_persistent`: a reference implementation in OCaml
@@ -25,7 +55,7 @@ Currently we have implemented:
   by rolling out our own allocator for movable roots, and implementing
   a fast scanning of the roots registered with caml_scan_roots_hook.
 
-## Some numbers on my machine
+#### Some numbers on my machine
 
 ```
 $ make run
