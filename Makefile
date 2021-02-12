@@ -2,6 +2,7 @@
 
 BENCHMARKS = $(addprefix ,\
   perm_count.bench \
+  synthetic.bench \
 )
 
 .PHONY: entry
@@ -13,6 +14,7 @@ entry:
 
 .PHONY: all
 all: $(BENCHMARKS)
+	@echo "Available benchmarks:" $(BENCHMARKS)
 
 %.bench: _build/%.exe
 	cp $< $@
@@ -36,6 +38,7 @@ run_bench = \
 .PHONY: run
 run: $(BENCHMARKS)
 	$(call run_bench,./perm_count.bench,10)
+# Note: synthetic.bench is not run by default, it is too experimental for now.
 
 .PHONY: test-boxroot
 test-boxroot: ./perm_count.bench
