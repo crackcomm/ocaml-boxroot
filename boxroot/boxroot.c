@@ -27,8 +27,8 @@
 /* {{{ Parameters */
 
 /* Log of the size of the pools (12 = 4KB, an OS page).
-   Recommended: 14-15. */
-#define POOL_LOG_SIZE 15
+   Recommended: 14. */
+#define POOL_LOG_SIZE 14
 /* If the macro BOXROOT_STATS is defined, print statistics on teardown
    from OCaml?
    Recommended: 0. */
@@ -706,14 +706,10 @@ static void validate_all_pools()
     });
 }
 
-#define MINOR_SCANNING_ACTION caml_oldify_one
-#define MAJOR_SCANNING_ACTION caml_darken
-#define COMPACT_SCANNING_ACTION caml_invert_root
-
 static int in_minor_collection = 0;
 
 // returns the amount of work done
-static inline int scan_pool(scanning_action action, pool *pool)
+static int scan_pool(scanning_action action, pool *pool)
 {
   int allocs_to_find = pool->hd.alloc_count;
   slot *current = pool->roots;
@@ -731,23 +727,6 @@ static inline int scan_pool(scanning_action action, pool *pool)
   return current - pool->roots;
 }
 
-// returns the amount of work done
-static int scan_pool_dispatch(scanning_action action, pool * pool)
-{
-  int work = 0;
-  // Do a static dispatch whenever useful. The specialisations do not
-  // change the semantics of the program compared to the "else"
-  // branch.
-  if (in_minor_collection && action == &MINOR_SCANNING_ACTION) {
-    work += scan_pool(MINOR_SCANNING_ACTION, pool);
-  } else if (!in_minor_collection && action == &MAJOR_SCANNING_ACTION) {
-    work += scan_pool(MAJOR_SCANNING_ACTION, pool);
-  } else {
-    work += scan_pool(action, pool);
-  }
-  return work;
-}
-
 static int scan_pools(scanning_action action)
 {
   int work = 0;
@@ -758,12 +737,14 @@ static int scan_pools(scanning_action action)
       if (start_pool == NULL) continue;
       pool *p = start_pool;
       do {
-        work += scan_pool_dispatch(action, p);
+        work += scan_pool(action, p);
         p = p->hd.next;
       } while (p != start_pool);
     });
   return work;
 }
+
+#define COMPACT_SCANNING_ACTION caml_invert_root
 
 static void scan_roots(scanning_action action)
 {
