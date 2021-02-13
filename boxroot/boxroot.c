@@ -40,8 +40,12 @@
     (0 < LOW_COUNT_THRESHOLD < HIGH_COUNT_THRESHOLD < 31.)
     Recommended: 31.*/
 #define HIGH_COUNT_THRESHOLD 31
-/* Print statistics on teardown? */
-#define PRINT_STATS (defined(BOXROOT_STATS))
+/* Print statistics on teardown from OCaml? */
+#ifdef BOXROOT_STATS
+#define PRINT_STATS 1
+#else
+#define PRINT_STATS 0
+#endif
 /* Check integrity of pool structure after each scan, and print
    additional statistics? (slow) */
 #define DEBUG 0
@@ -417,7 +421,6 @@ static pool * alloc_pool()
   ++stats.live_pools;
   if (stats.live_pools > stats.peak_pools)
     stats.peak_pools = stats.live_pools;
-  }
   pool *out = get_uninitialised_pool();
 
   if (out == NULL) return NULL;
@@ -932,10 +935,10 @@ static int boxroot_used()
       if (class == UNTRACKED) continue;
       pool *p = *global;
       if (p != NULL && (p->hd.alloc_count != 0 || p->hd.next != p)) {
-        return true;
+        return 1;
       }
     });
-  return false;
+  return 0;
 }
 
 void boxroot_print_stats()
@@ -949,8 +952,6 @@ void boxroot_print_stats()
          stats.minor_collections,
          stats.major_collections);
 
-  if (!boxroot_used()) return;
-
   int scanning_work_minor = average(stats.total_scanning_work_minor, stats.minor_collections);
   int scanning_work_major = average(stats.total_scanning_work_major, stats.major_collections);
   long long total_scanning_work = stats.total_scanning_work_minor + stats.total_scanning_work_major;
@@ -958,6 +959,8 @@ void boxroot_print_stats()
   int total_mib = kib_of_pools(stats.total_alloced_pools, 2);
   int freed_mib = kib_of_pools(stats.total_freed_pools, 2);
   int peak_mib = kib_of_pools(stats.peak_pools, 2);
+
+  if (!boxroot_used() && total_scanning_work == 0) return;
 
   printf("POOL_LOG_SIZE: %d (%'d KiB, %'d roots)\n"
          "USE_MMAP: %d\n"
@@ -1083,8 +1086,8 @@ void boxroot_teardown()
 
 value boxroot_scan_hook_teardown(value unit)
 {
-  boxroot_teardown();
   if (PRINT_STATS) boxroot_print_stats();
+  boxroot_teardown();
   return unit;
 }
 

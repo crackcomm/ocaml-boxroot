@@ -46,7 +46,6 @@ test-boxroot: benchmarks/perm_count.exe
 
 clean:
 	rm -fR _build
-	rm perm_count.bench
 
 
 
