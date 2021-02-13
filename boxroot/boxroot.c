@@ -201,16 +201,15 @@ static struct {
   pool *free;
   /* Unitialised */
   pool *uninitialised;
-} pools; // zero-initialized
+} pools;
 
-static pool **global_rings[] =
+static pool ** const global_rings[] =
   { &pools.old_full, &pools.old_available, &pools.old_low,
     &pools.young_available, &pools.young_full, &pools.free,
     &pools.uninitialised, NULL };
 
-static class global_ring_classes[] = { OLD, OLD, OLD,
-                                       YOUNG, YOUNG,
-                                       UNTRACKED, UNTRACKED };
+static const class global_ring_classes[] =
+  { OLD, OLD, OLD, YOUNG, YOUNG, UNTRACKED, UNTRACKED };
 
 /* Iterate on all global rings.
    [global_ring]: a variable of type [pool**].
@@ -218,15 +217,15 @@ static class global_ring_classes[] = { OLD, OLD, OLD,
    [action]: an expression that can refer to global_ring and cl.
 */
 #define FOREACH_GLOBAL_RING(global_ring, cl, action) do {               \
-    pool ***b__st = &global_rings[0];                                   \
-    for (pool ***b__i = b__st; *b__i != NULL; b__i++) {                 \
+    pool ** const *b__st = &global_rings[0];                            \
+    for (pool ** const *b__i = b__st; *b__i != NULL; b__i++) {          \
       pool **global_ring = *b__i;                                       \
       class cl = global_ring_classes[b__i - b__st];                     \
       action;                                                           \
     }                                                                   \
   } while (0)
 
-static struct {
+static struct stats {
   int minor_collections;
   int major_collections;
   int total_create;
@@ -247,7 +246,9 @@ static struct {
   long long get_pool_header; // number of times get_pool_header was called
   long long is_pool_member; // number of times is_pool_member was called
   long long is_last_elem; // number of times is_last_elem was called
-} stats; // zero-initialized
+};
+
+static struct stats stats;
 
 /* }}} */
 
@@ -1081,6 +1082,9 @@ int boxroot_setup()
 {
   if (setup) return 0;
   // initialise globals
+  in_minor_collection = 0;
+  struct stats empty_stats = {0};
+  stats = empty_stats;
   FOREACH_GLOBAL_RING(global, cl, { *global = NULL; });
   if (!populate_pools(YOUNG) || !populate_pools(OLD)) return 0;
   // save previous callbacks
