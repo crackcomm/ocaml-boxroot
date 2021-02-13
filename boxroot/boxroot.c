@@ -79,13 +79,12 @@
    page.)
    Recommended: 22. */
 #define SUPERBLOCK_LOG_SIZE 22
-/* Defragment during compaction?
+/* Defragment nearly-empty pools before attribution?
    + Better cache locality for successive allocations after lots of
      deallocations.
    + Improves early exit during scanning after lots of deallocations.
-   TODO:
-    - Implement defrag on demotion?
-    Recommended: 0. */
+   Defragmentation is always done during compaction.
+   Recommended: 0. */
 #define DEFRAG 0
 /* Use __builtin_expect in hot paths? (suggested by looking at the
    generated assembly in godbolt). Can cause swings of 5-10%, and in
@@ -482,6 +481,8 @@ static int free_all_chunks(pool *start_pool)
 
 /* {{{ Pool class management */
 
+static void defrag_pool(pool *);
+
 // Find an available pool for the class; place it in front of the ring
 // of available pools and return it. Return NULL if none was found and
 // the allocation of a new one failed.
@@ -498,9 +499,11 @@ static pool * populate_pools(int for_young)
     // OLD: We reserve the less full pools for re-use as young pools, but
     // we did what we could, so take a less full one anyway.
     new_pool = ring_pop(&pools.old_low);
+    if (DEFRAG) defrag_pool(new_pool);
     // Do not bother with quasi-full pools.
   } else if (pools.free != NULL) {
     new_pool = ring_pop(&pools.free);
+    if (DEFRAG) defrag_pool(new_pool);
   } else {
     // High time we allocate a pool.
     new_pool = alloc_pool();
@@ -791,6 +794,7 @@ static void validate_all_pools()
 // sort pool in increasing sequence
 static void defrag_pool(pool * pool)
 {
+  ++stats.defrag_sort;
   slot *current = pool->roots;
   slot *pool_end = &pool->roots[POOL_ROOTS_CAPACITY];
   slot **freelist_last = &pool->hd.free_list;
@@ -799,7 +803,6 @@ static void defrag_pool(pool * pool)
     if (!is_pool_member(v, pool)) continue;
     *freelist_last = current;
     freelist_last = (slot **)current;
-    ++stats.defrag_sort;
   }
   *freelist_last = pool_end;
 }
