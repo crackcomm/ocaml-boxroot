@@ -96,7 +96,7 @@ _build/%.h: %.h
 
 _build/%.ml: %.ml
 	@mkdir -p $(shell dirname ./$@)
-	echo '#0 "$<"' | cat - $< > $@
+	echo '#1 "$<"' | cat - $< > $@
 
 # build rules
 %.cmx: %.ml
