@@ -1,7 +1,8 @@
 # Entry points
 
-BENCHMARKS = $(addprefix ,\
-  perm_count.bench \
+BENCHMARKS = $(addprefix benchmarks/,\
+  perm_count.exe \
+  synthetic.exe \
 )
 
 .PHONY: entry
@@ -13,8 +14,9 @@ entry:
 
 .PHONY: all
 all: $(BENCHMARKS)
+	@echo "Available benchmarks:" $(BENCHMARKS)
 
-%.bench: _build/%.exe
+benchmarks/%.exe: _build/benchmarks/%.exe
 	cp $< $@
 
 EMPTY=
@@ -35,11 +37,12 @@ run_bench = \
 
 .PHONY: run
 run: $(BENCHMARKS)
-	$(call run_bench,./perm_count.bench,10)
+	$(call run_bench,benchmarks/perm_count.exe,10)
+# Note: synthetic.bench is not run by default, it is too experimental for now.
 
 .PHONY: test-boxroot
-test-boxroot: ./perm_count.bench
-	NITER=10 IMPLEM=boxroots ./perm_count.bench
+test-boxroot: benchmarks/perm_count.exe
+	NITER=10 IMPLEM=boxroots benchmarks/perm_count.exe
 
 clean:
 	rm -fR _build
@@ -49,13 +52,13 @@ clean:
 
 # Build rules
 
-C_HEADERS=$(addprefix _build/,$(wildcard boxroot/*.h choice/*.h))
+C_HEADERS=$(addprefix _build/,$(wildcard boxroot/*.h benchmarks/lib-choice/*.h))
 
 BOXROOT_LIB = $(addprefix _build/boxroot/,\
   boxroot.o \
 )
 
-CHOICE_MODULES = $(addprefix _build/choice/,\
+CHOICE_MODULES = $(addprefix _build/benchmarks/lib-choice/,\
   choice_ocaml_persistent.cmx \
   choice_ocaml_ephemeral.cmx \
   abstract_value.o \
@@ -67,7 +70,7 @@ CHOICE_MODULES = $(addprefix _build/choice/,\
   config.cmx \
 )
 
-LIB_DIRS=boxroot choice
+LIB_DIRS=boxroot benchmarks/lib-choice
 INCLUDE_LIB_DIRS=$(foreach DIR,$(LIB_DIRS), -I _build/$(DIR))
 
 # for debugging
@@ -79,23 +82,24 @@ show-deps:
 	@mkdir -p $(shell dirname ./$@)
 	ocamlopt -runtime-variant i $(INCLUDE_LIB_DIRS) -g -o $@ $^
 # see http://www.gnu.org/software/make/manual/html_node/Chained-Rules.html
+.PRECIOUS: %.exe %.cmx
 .SECONDARY: $(BOXROOT_LIB) $(CHOICE_MODULES)
-.PRECIOUS: %.cmx
 
 # copy rules
 .PRECIOUS: _build/%.c _build/%.h _build/%.ml
 _build/%.c: %.c
 	@mkdir -p $(shell dirname ./$@)
-	cp $< $@
+	echo '#line 1 "$<"' | cat - $< > $@
 
 _build/%.h: %.h
 	@mkdir -p $(shell dirname ./$@)
-	cp $< $@
+	echo '#line 1 "$<"' | cat - $< > $@
 
 _build/%.ml: %.ml
 	@mkdir -p $(shell dirname ./$@)
-	cp $< $@
+	echo '#1 "$<"' | cat - $< > $@
 
+# build rules
 %.cmx: %.ml
 	@mkdir -p $(shell dirname ./$@)
 	ocamlopt $(INCLUDE_LIB_DIRS) -g -c $< -o $@
@@ -104,4 +108,7 @@ _build/%.ml: %.ml
 # (-c and -o together are rejected)
 .SECONDARY: $(C_HEADERS)
 %.o: %.c $(C_HEADERS)
-	$(shell ocamlopt -config-var native_c_compiler) -g -I'$(shell ocamlopt -where)' -I_build -I$(shell dirname $<) -c $< -o $@
+	$(shell ocamlopt -config-var native_c_compiler) -g \
+	  -I'$(shell ocamlopt -where)' -I_build -I$(shell dirname $<) \
+	  -DBOXROOT_STATS \
+	  -c $< -o $@
