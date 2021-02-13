@@ -43,7 +43,7 @@
 /* If the macro BOXROOT_STATS is defined, print statistics on teardown
    from OCaml?
    Recommended: 0. */
-#define PRINT_STATS 1
+#define PRINT_STATS 0
 /* Check integrity of pool structure after each scan, and print
    additional statistics? (slow)
    Recommended: 0. */
@@ -270,20 +270,20 @@ static struct stats stats;
 /* {{{ Tests in the hot path */
 
 // hot path
-static inline pool * get_pool_header(slot v)
+static inline pool * get_pool_header(slot *v)
 {
   if (DEBUG) ++stats.get_pool_header;
   return (pool *)((uintptr_t)v & ~((uintptr_t)POOL_SIZE - 1));
 }
 
-// hot path
 // Return true iff v shares the same msbs as p and is not an
 // immediate.
 static inline int is_pool_member_nostats(slot v, pool *p)
 {
-  /* 0bxxxxx0000001 */
   return (uintptr_t)p == ((uintptr_t)v & ~((uintptr_t)POOL_SIZE - 2));
 }
+
+// hot path
 static inline int is_pool_member(slot v, pool *p)
 {
   if (DEBUG) ++stats.is_pool_member;
@@ -298,16 +298,19 @@ static inline int is_last_elem(slot *v)
 }
 
 // hot path
-static inline int is_young(value v)
+static inline int is_young_block(value v)
 {
   if (DEBUG) ++stats.is_young;
 #if FAST_IS_YOUNG != 0
   /* a < x <= b  <=>  (unsigned)(b-x) < b-a  (from Hacker's Delight)
      Note that b cannot be the address of a value because the header would be in b-1. */
-  return (unsigned int)((uintptr_t)caml_young_end - (uintptr_t)v) < (unsigned int)(
-    (uintptr_t)caml_young_end - (uintptr_t)caml_young_start);
+  uintptr_t x = (uintptr_t)caml_young_end - (uintptr_t)v;
+  // Borrowed from Stephen Dolan
+  uintptr_t rotated = (x << ((sizeof x) * 8 - 1)) | (x >> 1);
+  uintptr_t half_minor_size = ((uintptr_t)caml_young_end - (uintptr_t)caml_young_start) >> 1;
+  return rotated < half_minor_size;
 #else
-  return Is_young(v);
+  return Is_block(v) && Is_young(v);
 #endif
 }
 
@@ -487,11 +490,9 @@ static int free_all_chunks(pool *start_pool)
 // Find an available pool for the class; place it in front of the ring
 // of available pools and return it. Return NULL if none was found and
 // the allocation of a new one failed.
-static pool * populate_pools(class class)
+static pool * populate_pools(int for_young)
 {
-  assert(class != UNTRACKED);
-  pool **target = (class == YOUNG) ?
-    &pools.young_available : &pools.old_available;
+  pool **target = for_young ? &pools.young_available : &pools.old_available;
   if (*target != NULL &&
       !is_last_elem((*target)->hd.free_list)) {
     return *target;
@@ -511,7 +512,7 @@ static pool * populate_pools(class class)
     new_pool = alloc_pool();
   }
   if (new_pool == NULL) return NULL;
-  new_pool->hd.class = class;
+  new_pool->hd.class = for_young ? YOUNG : OLD;
   ring_concat(new_pool, target);
   return new_pool;
 }
@@ -623,7 +624,7 @@ static void promote_young_pools()
     pool_reclassify(p, pool_class);
   }
   // Now ensure [pools.young_available != NULL]
-  pool *new_young_pool = populate_pools(YOUNG);
+  pool *new_young_pool = populate_pools(1);
   if (new_young_pool == NULL) {
     // Memory allocation failed somehow. Since this is called during
     // minor collection, we cannot fail here, so we put back the
@@ -639,13 +640,12 @@ static void promote_young_pools()
 
 /* {{{ Allocation, deallocation */
 
-static value * alloc_boxroot_slow(class class);
+static slot * alloc_slot_slow(int);
 
 // hot path
-static inline value * alloc_boxroot(class class)
+static inline slot * alloc_slot(int for_young_block)
 {
-  if (DEBUG) assert(class != UNTRACKED);
-  pool *p = (class == YOUNG) ? pools.young_available : pools.old_available;
+  pool *p = for_young_block ? pools.young_available : pools.old_available;
   if (DEBUG) assert(p != NULL);
   slot *new_root = p->hd.free_list;
   if (DEBUG) {
@@ -657,34 +657,33 @@ static inline value * alloc_boxroot(class class)
   if (LIKELY(!is_last_elem(new_root))) {
     p->hd.free_list = (slot *)*new_root;
     p->hd.alloc_count++;
-    return (value *)new_root;
+    return new_root;
   }
-  return alloc_boxroot_slow(class);
+  return alloc_slot_slow(for_young_block);
 }
 
 // Place an available pool in front of the ring and allocate from it.
-static value * alloc_boxroot_slow(class class)
+static slot * alloc_slot_slow(int for_young_block)
 {
   // TODO Latency: bound the number of young roots alloced at each
   // minor collection by scheduling a minor collection.
-  assert(class != UNTRACKED);
-  pool **available_pools = (class == YOUNG) ?
+  pool **available_pools = for_young_block ?
     &pools.young_available : &pools.old_available;
   pool *full = ring_pop(available_pools);
   assert(pool_class_promote(full) == QUASI_FULL);
-  assert(class == full->hd.class);
+  assert(for_young_block == (YOUNG == full->hd.class));
   pool_reclassify(full, QUASI_FULL);
-  pool *p = populate_pools(class);
+  pool *p = populate_pools(for_young_block);
   if (p == NULL) return NULL;
-  assert(!is_last_elem(p->hd.free_list) && p->hd.class == class);
-  return alloc_boxroot(class);
+  assert(!is_last_elem(p->hd.free_list));
+  assert(for_young_block == (p->hd.class == YOUNG));
+  return alloc_slot(for_young_block);
 }
 
 // hot path
-static inline void free_boxroot(value *root)
+// assumes [is_pool_member(root, p)]
+static inline void free_slot(slot *s, pool *p)
 {
-  slot *s = (slot *)root;
-  pool *p = get_pool_header(s);
   *s = (slot)p->hd.free_list;
   p->hd.free_list = s;
   if (DEBUG) assert(p->hd.alloc_count > 0);
@@ -698,38 +697,18 @@ static inline void free_boxroot(value *root)
 /* {{{ Boxroot API implementation */
 
 // hot path
-static inline class classify_value(value v)
+static inline boxroot root_create_classified(value init, int for_young_block)
 {
-  if (!Is_block(v)) return UNTRACKED;
-  if (is_young(v)) return YOUNG;
-  return OLD;
-}
-
-// hot path
-static inline class classify_boxroot(boxroot root)
-{
-  return classify_value(*(value *)root);
-}
-
-// hot path
-static inline boxroot boxroot_create_classified(value init, class class)
-{
-  if (DEBUG) ++stats.total_create;
-  value *cell;
-  if (LIKELY(class != UNTRACKED)) {
-    cell = alloc_boxroot(class);
-  } else {
-    cell = (value *) malloc(sizeof(value));
-    // TODO: further optim: use a global table instead of malloc for
-    // very small values of [init] for fast variants.
-  }
+  value *cell = (value *)alloc_slot(for_young_block);
   if (LIKELY(cell != NULL)) *cell = init;
   return (boxroot)cell;
 }
 
+// hot path
 boxroot boxroot_create(value init)
 {
-  return boxroot_create_classified(init, classify_value(init));
+  if (DEBUG) ++stats.total_create;
+  return root_create_classified(init, is_young_block(init));
 }
 
 value const * boxroot_get(boxroot root)
@@ -738,42 +717,28 @@ value const * boxroot_get(boxroot root)
 }
 
 // hot path
-static inline void boxroot_delete_classified(boxroot root, class class)
-{
-  if (DEBUG) ++stats.total_delete;
-  value *cell = (value *)root;
-  if (LIKELY(class != UNTRACKED)) {
-    free_boxroot(cell);
-  } else {
-    free(cell);
-  }
-}
-
-// hot path
 void boxroot_delete(boxroot root)
 {
-  CAMLassert(root);
-  boxroot_delete_classified(root, classify_boxroot(root));
+  slot *s = (slot *)root;
+  CAMLassert(s);
+  if (DEBUG) ++stats.total_delete;
+  free_slot(s, get_pool_header(s));
 }
 
 // hot path
-void boxroot_modify(boxroot *root_ref, value new_value)
+void boxroot_modify(boxroot *root, value new_value)
 {
-  boxroot root = *root_ref;
-  CAMLassert(root);
+  slot *s = (slot *)*root;
+  CAMLassert(s);
   if (DEBUG) ++stats.total_modify;
-  class old_class = classify_boxroot(root);
-  class new_class = classify_value(new_value);
-
-  if (old_class == new_class
-      || (old_class == YOUNG && new_class == OLD)) {
-    // No need to reallocate
-    *(value *)root = new_value;
+  class is_new_young_block = is_young_block(new_value);
+  pool *p;
+  if (!is_new_young_block || (p = get_pool_header(s))->hd.class == YOUNG) {
+    *(value *)s = new_value;
     return;
   }
-
-  boxroot_delete_classified(root, old_class);
-  *root_ref = boxroot_create_classified(new_value, new_class);
+  free_slot(s, p);
+  *root = root_create_classified(new_value, is_new_young_block);
   // Note: *root_ref can become NULL, which must be checked explicitly
   // (in Rust, check and panic here).
 }
@@ -804,10 +769,10 @@ static void validate_pool(pool *pool)
   // check count of allocated elements
   int alloc_count = 0;
   for(int i = 0; i < POOL_ROOTS_CAPACITY; i++) {
-    slot v = pool->roots[i];
-    if (!is_pool_member_nostats(v, pool)) {
-      if (pool->hd.class != YOUNG && !Is_block((value)v))
-        assert(!Is_young((value)v));
+    slot s = pool->roots[i];
+    if (!is_pool_member_nostats(s, pool)) {
+      value v = (value)s;
+      if (pool->hd.class != YOUNG) assert(!Is_block(v) || !Is_young(v));
       ++alloc_count;
     }
   }
@@ -1036,7 +1001,7 @@ void boxroot_print_stats()
          stats.total_delete,
          stats.total_modify);
 
-  printf("is_young: %'lld\n"
+  printf("is_young_block: %'lld\n"
          "young hits: %d%%\n"
          "get_pool_header: %'lld\n"
          "is_pool_member: %'lld\n"
@@ -1099,7 +1064,7 @@ int boxroot_setup()
   struct stats empty_stats = {0};
   stats = empty_stats;
   FOREACH_GLOBAL_RING(global, cl, { *global = NULL; });
-  if (!populate_pools(YOUNG) || !populate_pools(OLD)) return 0;
+  if (!populate_pools(1) || !populate_pools(0)) return 0;
   // save previous callbacks
   prev_scan_roots_hook = caml_scan_roots_hook;
   prev_minor_begin_hook = caml_minor_gc_begin_hook;
