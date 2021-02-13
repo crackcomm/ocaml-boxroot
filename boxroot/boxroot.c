@@ -24,32 +24,32 @@
 
 /* }}} */
 
-/* {{{ Options */
+/* {{{ Parameters */
 
-#define POOL_LOG_SIZE 13 // 12 = 4KB
-
-#define NUM_THRESHOLD_LOG 5 // 32
- /* Old pools become candidate for young allocation below
-    LOW_COUNT_THRESHOLD / 2^NUM_THRESHOLD_LOG occupancy. This tries to
-    guarantee that minor scanning hits a good proportion of young
-    values.
-    Recommended: 16. */
+/* Log of the size of the pools (12 = 4KB, an OS page).
+   Recommended: 14-15.
+ */
+#define POOL_LOG_SIZE 15
+/* Old pools become candidate for young allocation below
+   LOW_COUNT_THRESHOLD / 32 occupancy. This tries to guarantee that
+   minor scanning hits a good proportion of young values.
+   Recommended: 16. */
 #define LOW_COUNT_THRESHOLD 16
- /* Pools become candidate for allocation below
-    HIGH_COUNT_THRESHOLD / 2^NUM_THRESHOLD_LOG occupancy.
-    (0 < LOW_COUNT_THRESHOLD < HIGH_COUNT_THRESHOLD < 31.)
-    Recommended: 31.*/
+/* Pools become candidate for allocation below
+   HIGH_COUNT_THRESHOLD / 32 occupancy.
+   (0 < LOW_COUNT_THRESHOLD < HIGH_COUNT_THRESHOLD < 31.)
+   Recommended: 31. */
 #define HIGH_COUNT_THRESHOLD 31
-/* Print statistics on teardown from OCaml? */
-#ifdef BOXROOT_STATS
+/* If the macro BOXROOT_STATS is defined, print statistics on teardown
+   from OCaml?
+   Recommended: 0. */
 #define PRINT_STATS 1
-#else
-#define PRINT_STATS 0
-#endif
 /* Check integrity of pool structure after each scan, and print
-   additional statistics? (slow) */
+   additional statistics? (slow)
+   Recommended: 0. */
 #define DEBUG 0
-/* Allocate with mmap? */
+/* Allocate with mmap? (not fully implemented)
+   Recommended: 0. */
 #define USE_MMAP 0
 /* Advise to use transparent huge pages? (Linux)
 
@@ -59,8 +59,9 @@
    `MALLOC_CONF="thp:always,metadata_thp:auto"                 \
    LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2       \
    make run`. (probably due to the malloc in value_list_functor.h)
-*/
-#define USE_MADV_HUGEPAGE 1
+
+   Recommended: 0. */
+#define USE_MADV_HUGEPAGE 0
 /* Whether to pre-allocate several pools at once. Free pools are put
    aside and re-used instead of being immediately freed. Does not
    support memory reclamation yet.
@@ -69,32 +70,46 @@
      reclamation. Note: this is fair: it is enough to reclaim memory
      at Gc.compact like the OCaml Gc. Not observed with jemalloc.
    - Slower than aligned_alloc for small pool sizes (independently of
-     superblock sizes?). */
+     superblock sizes?). Note: the current promotion/demotion
+     heuristics work better with larger pools.
+
+   Recommended: 1. */
 #define USE_SUPERBLOCK 1
-#define SUPERBLOCK_LOG_SIZE 21 // 21 = 2MB (a huge page)
+/* Size of a superblock if USE_SUPERBLOCK is 1. (21 = 2MB, a huge
+   page.)
+   Recommended: 22. */
+#define SUPERBLOCK_LOG_SIZE 22
 /* Defragment during compaction?
    + Better cache locality for successive allocations after lots of
      deallocations.
    + Improves early exit during scanning after lots of deallocations.
    TODO:
-    - Implement defrag on demotion
-*/
+    - Implement defrag on demotion?
+    Recommended: 0. */
 #define DEFRAG 0
 /* Use __builtin_expect in hot paths? (suggested by looking at the
-   generated assembly in godbolt).
-   Invert is sometimes faster (~5%) => probably shows effect of code
+   generated assembly in godbolt). Can cause swings of 5-10%, and in
+   general 1 lets more easily reproduce good performance. Sometimes 1
+   is slow and 2 is faster => probably shows effect of code
    (mis)alignment.
    0 = off
    1 = on
    2 = invert
- */
+   Recommended: 1. */
 #define WITH_EXPECT 1
-/* A potentially faster is_young test. */
+/* A potentially faster is_young test. Little effect in my
+   experiments.
+   Recommended: 0. */
 #define FAST_IS_YOUNG 0
 
 /* }}} */
 
 /* {{{ Setup */
+
+#ifndef BOXROOT_STATS
+#undef PRINT_STATS
+#define PRINT_STATS 0
+#endif
 
 #if PRINT_STATS != 0
 #include <locale.h>
@@ -501,6 +516,7 @@ static pool * populate_pools(class class)
   return new_pool;
 }
 
+#define NUM_THRESHOLD_LOG 5 // 32
 #define NUM_THRESHOLD ((int)1 << NUM_THRESHOLD_LOG)
 #define THRESHOLD_SIZE (POOL_SIZE / (NUM_THRESHOLD * sizeof(slot)))
 
@@ -852,7 +868,7 @@ static inline int scan_pool(scanning_action action, pool *pool, int do_old)
     if (LIKELY((!is_pool_member(s, pool)))) {
       --allocs_to_find;
       value v = (value)s;
-      if (DEBUG && Is_young(v)) ++stats.young_hit;
+      if (DEBUG && Is_block(v) && Is_young(v)) ++stats.young_hit;
       action(v, (value *)current);
     }
     ++current;
@@ -868,9 +884,9 @@ static int scan_pool_dispatch(scanning_action action, pool * pool)
     defrag_pool(pool);
     work += POOL_ROOTS_CAPACITY;
   }
-  // Do a static dispatch whenever useful. For correctness, the
-  // specialisations do not change the semantics of the program
-  // compared to the "else" branch.
+  // Do a static dispatch whenever useful. The specialisations do not
+  // change the semantics of the program compared to the "else"
+  // branch.
   if (in_minor_collection && action == &MINOR_SCANNING_ACTION) {
     work += scan_pool(MINOR_SCANNING_ACTION, pool, 0);
   } else if (!in_minor_collection && action == &MAJOR_SCANNING_ACTION) {
@@ -909,8 +925,8 @@ static void scan_roots(scanning_action action)
     stats.total_scanning_work_major += work;
   }
   if (action == &COMPACT_SCANNING_ACTION) {
-    // For correctness this branch does not change the observable
-    // semantics of the program.
+    // This branch does not change the observable semantics of the
+    // program.
     stats.total_freed_pools += free_all_chunks(pools.free);
     pools.free = NULL;
   }
@@ -951,10 +967,6 @@ static int boxroot_used()
 
 void boxroot_print_stats()
 {
-#if PRINT_STATS != 0
-  setlocale(LC_ALL, "en_US.UTF-8");
-#endif
-
   printf("minor collections: %d\n"
          "major collections (and others): %d\n",
          stats.minor_collections,
@@ -1025,7 +1037,7 @@ void boxroot_print_stats()
          stats.total_modify);
 
   printf("is_young: %'lld\n"
-         "young_hit: %d%%\n"
+         "young hits: %d%%\n"
          "get_pool_header: %'lld\n"
          "is_pool_member: %'lld\n"
          "is_last_elem: %'lld\n",
@@ -1119,7 +1131,10 @@ void boxroot_teardown()
 
 value boxroot_scan_hook_teardown(value unit)
 {
-  if (PRINT_STATS) boxroot_print_stats();
+#if PRINT_STATS != 0
+  setlocale(LC_ALL, "en_US.UTF-8");
+  boxroot_print_stats();
+#endif
   boxroot_teardown();
   return unit;
 }
