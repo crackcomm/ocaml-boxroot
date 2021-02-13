@@ -27,19 +27,8 @@
 /* {{{ Parameters */
 
 /* Log of the size of the pools (12 = 4KB, an OS page).
-   Recommended: 14-15.
- */
+   Recommended: 14-15. */
 #define POOL_LOG_SIZE 15
-/* Old pools become candidate for young allocation below
-   LOW_COUNT_THRESHOLD / 32 occupancy. This tries to guarantee that
-   minor scanning hits a good proportion of young values.
-   Recommended: 16. */
-#define LOW_COUNT_THRESHOLD 16
-/* Pools become candidate for allocation below
-   HIGH_COUNT_THRESHOLD / 32 occupancy.
-   (0 < LOW_COUNT_THRESHOLD < HIGH_COUNT_THRESHOLD < 31.)
-   Recommended: 31. */
-#define HIGH_COUNT_THRESHOLD 31
 /* If the macro BOXROOT_STATS is defined, print statistics on teardown
    from OCaml?
    Recommended: 0. */
@@ -514,9 +503,17 @@ static pool * populate_pools(int for_young)
   return new_pool;
 }
 
-#define NUM_THRESHOLD_LOG 5 // 32
-#define NUM_THRESHOLD ((int)1 << NUM_THRESHOLD_LOG)
-#define THRESHOLD_SIZE (POOL_SIZE / (NUM_THRESHOLD * sizeof(slot)))
+/* Interrupt deallocation every THRESHOLD_SIZE. */
+#define THRESHOLD_SIZE_LOG 4 // 16
+#define THRESHOLD_SIZE ((int)1 << THRESHOLD_SIZE_LOG)
+#define NUM_THRESHOLD (POOL_SIZE / (THRESHOLD_SIZE * sizeof(slot)))
+/* Old pools become candidate for young allocation below
+   LOW_COUNT_THRESHOLD / NUM_THRESHOLD occupancy. This tries to guarantee that
+   minor scanning hits a good proportion of young values. */
+#define LOW_COUNT_THRESHOLD (NUM_THRESHOLD / 2)
+/* Pools become candidate for allocation below
+   HIGH_COUNT_THRESHOLD / NUM_THRESHOLD occupancy. */
+#define HIGH_COUNT_THRESHOLD (NUM_THRESHOLD - 1)
 
 static_assert(0 < LOW_COUNT_THRESHOLD, "");
 static_assert(LOW_COUNT_THRESHOLD < HIGH_COUNT_THRESHOLD, "");
