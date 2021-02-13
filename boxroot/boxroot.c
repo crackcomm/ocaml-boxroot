@@ -1033,12 +1033,12 @@ void boxroot_print_stats()
 
 /* {{{ Hook setup */
 
-static void (*boxroot_prev_scan_roots_hook)(scanning_action);
+static void (*prev_scan_roots_hook)(scanning_action);
 
 static void scanning_callback(scanning_action action)
 {
-  if (boxroot_prev_scan_roots_hook != NULL) {
-    (*boxroot_prev_scan_roots_hook)(action);
+  if (prev_scan_roots_hook != NULL) {
+    (*prev_scan_roots_hook)(action);
   }
   if (action == &MINOR_SCANNING_ACTION) {
     ++stats.minor_collections;
@@ -1053,21 +1053,43 @@ static void scanning_callback(scanning_action action)
   if (boxroot_used()) scan_roots(action);
 }
 
+static caml_timing_hook prev_minor_begin_hook = NULL;
+static caml_timing_hook prev_minor_end_hook = NULL;
+
+static int in_minor_collection = 0;
+
+static void record_minor_begin()
+{
+  in_minor_collection = 1;
+  if (prev_minor_begin_hook != NULL) prev_minor_begin_hook();
+}
+
+static void record_minor_end()
+{
+  in_minor_collection = 0;
+  if (prev_minor_end_hook != NULL) prev_minor_end_hook();
+}
+
 static int setup = 0;
 
 // Must be called to set the hook
 int boxroot_setup()
 {
   if (setup) return 0;
-  boxroot_prev_scan_roots_hook = caml_scan_roots_hook;
-  caml_scan_roots_hook = scanning_callback;
+  // initialise globals
   FOREACH_GLOBAL_RING(global, cl, { *global = NULL; });
-  if (!populate_pools(YOUNG) || !populate_pools(OLD)) goto fail;
+  if (!populate_pools(YOUNG) || !populate_pools(OLD)) return 0;
+  // save previous callbacks
+  prev_scan_roots_hook = caml_scan_roots_hook;
+  prev_minor_begin_hook = caml_minor_gc_begin_hook;
+  prev_minor_end_hook = caml_minor_gc_end_hook;
+  // install our callbacks
+  caml_scan_roots_hook = scanning_callback;
+  caml_minor_gc_begin_hook = record_minor_begin;
+  caml_minor_gc_end_hook = record_minor_end;
+  // we are done
   setup = 1;
   return 1;
-fail:
-  caml_scan_roots_hook = boxroot_prev_scan_roots_hook;
-  return 0;
 }
 
 value boxroot_scan_hook_setup(value unit)
@@ -1079,7 +1101,9 @@ value boxroot_scan_hook_setup(value unit)
 void boxroot_teardown()
 {
   if (!setup) return;
-  caml_scan_roots_hook = boxroot_prev_scan_roots_hook;
+  caml_scan_roots_hook = prev_scan_roots_hook;
+  caml_minor_gc_begin_hook = prev_minor_begin_hook;
+  caml_minor_gc_end_hook = prev_minor_end_hook;
   FOREACH_GLOBAL_RING(global, cl, { free_all_chunks(*global); });
   setup = 0;
 }
