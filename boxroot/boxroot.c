@@ -204,7 +204,7 @@ static pool **global_rings[] =
 
 static class global_ring_classes[] = { OLD, OLD, OLD,
                                        YOUNG, YOUNG,
-                                       UNTRACKED, UNTRACKED};
+                                       UNTRACKED, UNTRACKED };
 
 /* Iterate on all global rings.
    [global_ring]: a variable of type [pool**].
@@ -904,10 +904,8 @@ static void scan_roots(scanning_action action)
   int work = scan_pools(action, for_minor);
   if (for_minor) {
     promote_young_pools();
-    ++stats.minor_collections;
     stats.total_scanning_work_minor += work;
   } else {
-    ++stats.major_collections;
     stats.total_scanning_work_major += work;
   }
   if (action == &COMPACT_SCANNING_ACTION) {
@@ -1031,10 +1029,28 @@ static void (*boxroot_prev_scan_roots_hook)(scanning_action);
 
 static void scanning_callback(scanning_action action)
 {
-  scan_roots(action);
   if (boxroot_prev_scan_roots_hook != NULL) {
     (*boxroot_prev_scan_roots_hook)(action);
   }
+  if (action == &MINOR_SCANNING_ACTION) {
+    ++stats.minor_collections;
+  } else {
+    ++stats.major_collections;
+  }
+  // If no boxroot has been allocated, then scan_roots should not have
+  // any noticeable cost. For experimental purposes, since this hook
+  // is also used for other the statistics of other implementations,
+  // we further make sure of this with an extra test, by avoiding
+  // calling scan_roots if it has only just been initialised.
+  FOREACH_GLOBAL_RING (global, class, {
+      if (class == UNTRACKED) continue;
+      if (global == NULL) continue;//cleanup
+      pool *p = *global;
+      if (p != NULL && (p->hd.alloc_count != 0 || p->hd.next != p)) {
+        scan_roots(action);
+        return;
+      }
+    });
 }
 
 // Must be called to set the hook
