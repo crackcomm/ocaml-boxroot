@@ -41,8 +41,8 @@ run: $(BENCHMARKS)
 # Note: synthetic.bench is not run by default, it is too experimental for now.
 
 .PHONY: test-boxroot
-test-boxroot: ./perm_count.bench
-	NITER=10 IMPLEM=boxroots ./perm_count.bench
+test-boxroot: benchmarks/perm_count.exe
+	NITER=10 IMPLEM=boxroots benchmarks/perm_count.exe
 
 clean:
 	rm -fR _build
