@@ -109,4 +109,5 @@ _build/%.ml: %.ml
 %.o: %.c $(C_HEADERS)
 	$(shell ocamlopt -config-var native_c_compiler) -g \
 	  -I'$(shell ocamlopt -where)' -I_build -I$(shell dirname $<) \
+	  -DBOXROOT_STATS \
 	  -c $< -o $@

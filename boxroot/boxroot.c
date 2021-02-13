@@ -19,7 +19,11 @@ static void *aligned_alloc(size_t alignment, size_t size) {
 }
 #endif
 
+#ifdef BOXROOT_STATS
 static const int do_print_stats = 1;
+#else
+static const int do_print_stats = 0;
+#endif
 
 typedef void * slot;
 
