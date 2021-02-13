@@ -837,6 +837,8 @@ static void defrag_pool(pool * pool)
 #define MAJOR_SCANNING_ACTION caml_darken
 #define COMPACT_SCANNING_ACTION caml_invert_root
 
+static int in_minor_collection = 0;
+
 // returns the amount of work done
 static inline int scan_pool(scanning_action action, pool *pool, int do_old)
 {
@@ -864,22 +866,25 @@ static int scan_pool_dispatch(scanning_action action, pool * pool)
     defrag_pool(pool);
     work += POOL_ROOTS_CAPACITY;
   }
-  // do a static dispatch whenever useful
-  if (action == &MINOR_SCANNING_ACTION) {
+  // Do a static dispatch whenever useful. For correctness, the
+  // specialisations do not change the semantics of the program
+  // compared to the "else" branch.
+  if (in_minor_collection && action == &MINOR_SCANNING_ACTION) {
     work += scan_pool(MINOR_SCANNING_ACTION, pool, 0);
-  } else if (action == &MAJOR_SCANNING_ACTION) {
+  } else if (!in_minor_collection && action == &MAJOR_SCANNING_ACTION) {
     work += scan_pool(MAJOR_SCANNING_ACTION, pool, 1);
   } else {
-    work += scan_pool(action, pool, 1);
+    work += scan_pool(action, pool, !in_minor_collection);
   }
   return work;
 }
 
-static int scan_pools(scanning_action action, int for_minor)
+static int scan_pools(scanning_action action)
 {
   int work = 0;
   FOREACH_GLOBAL_RING(global, class, {
-      if (class == UNTRACKED || (for_minor && class == OLD)) continue;
+      if (class == UNTRACKED || (in_minor_collection && class == OLD))
+        continue;
       pool *start_pool = *global;
       if (start_pool == NULL) continue;
       pool *p = start_pool;
@@ -894,15 +899,16 @@ static int scan_pools(scanning_action action, int for_minor)
 static void scan_roots(scanning_action action)
 {
   if (DEBUG) validate_all_pools();
-  int for_minor = (action == &MINOR_SCANNING_ACTION);
-  int work = scan_pools(action, for_minor);
-  if (for_minor) {
+  int work = scan_pools(action);
+  if (in_minor_collection) {
     promote_young_pools();
     stats.total_scanning_work_minor += work;
   } else {
     stats.total_scanning_work_major += work;
   }
   if (action == &COMPACT_SCANNING_ACTION) {
+    // For correctness this branch does not change the observable
+    // semantics of the program.
     stats.total_freed_pools += free_all_chunks(pools.free);
     pools.free = NULL;
   }
@@ -948,7 +954,7 @@ void boxroot_print_stats()
 #endif
 
   printf("minor collections: %d\n"
-         "major collections: %d\n",
+         "major collections (and others): %d\n",
          stats.minor_collections,
          stats.major_collections);
 
@@ -1040,7 +1046,7 @@ static void scanning_callback(scanning_action action)
   if (prev_scan_roots_hook != NULL) {
     (*prev_scan_roots_hook)(action);
   }
-  if (action == &MINOR_SCANNING_ACTION) {
+  if (in_minor_collection) {
     ++stats.minor_collections;
   } else {
     ++stats.major_collections;
@@ -1055,8 +1061,6 @@ static void scanning_callback(scanning_action action)
 
 static caml_timing_hook prev_minor_begin_hook = NULL;
 static caml_timing_hook prev_minor_end_hook = NULL;
-
-static int in_minor_collection = 0;
 
 static void record_minor_begin()
 {
