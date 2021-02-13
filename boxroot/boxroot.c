@@ -30,7 +30,7 @@ typedef void * slot;
 #define CHUNK_LOG_SIZE 12 // 4KB
 #define CHUNK_SIZE (1 << CHUNK_LOG_SIZE)
 #define HEADER_SIZE 5
-#define CHUNK_ROOTS_CAPACITY (CHUNK_SIZE / sizeof(slot) - HEADER_SIZE)
+#define CHUNK_ROOTS_CAPACITY ((int)(CHUNK_SIZE / sizeof(slot) - HEADER_SIZE))
 #define LOW_CAPACITY_THRESHOLD 50 // 50% capacity before promoting a
                                   // young chunk.
 
@@ -221,7 +221,7 @@ static int is_minor_scanning(scanning_action action)
 
 static int scan_chunk(scanning_action action, chunk * chunk)
 {
-  size_t i = 0;
+  int i = 0;
   for (; i < CHUNK_ROOTS_CAPACITY; ++i) {
     slot v = chunk->roots[i];
     if (v == NULL) {
