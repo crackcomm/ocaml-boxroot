@@ -329,18 +329,31 @@ static void print_stats()
 }
 
 // Must be called to set the hook
-void boxroot_scan_hook_setup()
+int boxroot_setup()
 {
   boxroot_prev_scan_roots_hook = caml_scan_roots_hook;
   caml_scan_roots_hook = boxroot_scan_roots;
+  return 1;
 }
 
-void boxroot_scan_hook_teardown()
+value boxroot_scan_hook_setup(value unit)
+{
+  boxroot_setup();
+  return Val_unit;
+}
+
+void boxroot_teardown()
 {
   caml_scan_roots_hook = boxroot_prev_scan_roots_hook;
   boxroot_prev_scan_roots_hook = NULL;
   if (do_print_stats) print_stats();
   //TODO: free all chunks
+}
+
+value boxroot_scan_hook_teardown(value unit)
+{
+  boxroot_teardown();
+  return Val_unit;
 }
 
 // Boxroot API implementation
