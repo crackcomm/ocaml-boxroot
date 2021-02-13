@@ -252,7 +252,7 @@ static struct {
 // hot path
 static inline pool * get_pool_header(slot v)
 {
-  if (DEBUG && PRINT_STATS) ++stats.get_pool_header;
+  if (DEBUG) ++stats.get_pool_header;
   return (pool *)((uintptr_t)v & ~((uintptr_t)POOL_SIZE - 1));
 }
 
@@ -266,21 +266,21 @@ static inline int is_pool_member_nostats(slot v, pool *p)
 }
 static inline int is_pool_member(slot v, pool *p)
 {
-  if (DEBUG && PRINT_STATS) ++stats.is_pool_member;
+  if (DEBUG) ++stats.is_pool_member;
   return is_pool_member_nostats(v, p);
 }
 
 // hot path
 static inline int is_last_elem(slot *v)
 {
-  if (DEBUG && PRINT_STATS) ++stats.is_last_elem;
+  if (DEBUG) ++stats.is_last_elem;
   return ((uintptr_t)(v + 1) & (POOL_SIZE - 1)) == 0;
 }
 
 // hot path
 static inline int is_young(value v)
 {
-  if (DEBUG && PRINT_STATS) ++stats.is_young;
+  if (DEBUG) ++stats.is_young;
 #if FAST_IS_YOUNG != 0
   /* a < x <= b  <=>  (unsigned)(b-x) < b-a  (from Hacker's Delight)
      Note that b cannot be the address of a value because the header would be in b-1. */
@@ -321,7 +321,7 @@ static void * alloc_chunk()
 #if USE_MADV_HUGEPAGE != 0
   madvise(p, CHUNK_SIZE, MADV_HUGEPAGE);
 #endif
-  if (PRINT_STATS) ++stats.total_alloced_chunks;
+  ++stats.total_alloced_chunks;
   return p;
 }
 
@@ -343,7 +343,7 @@ static void ring_init(pool *p)
 {
   p->hd.next = p;
   p->hd.prev = p;
-  if (PRINT_STATS) ++stats.ring_operations;
+  ++stats.ring_operations;
 }
 
 static void validate_pool(pool*);
@@ -368,7 +368,7 @@ static void ring_concat(pool *source, pool **target)
     old->hd.prev = source->hd.prev;
     source->hd.prev = last;
     *target = source;
-    if (PRINT_STATS) stats.ring_operations += 2;
+    stats.ring_operations += 2;
   }
 }
 
@@ -384,7 +384,7 @@ static pool * ring_pop(pool **target)
   }
   front->hd.prev->hd.next = front->hd.next;
   front->hd.next->hd.prev = front->hd.prev;
-  if (PRINT_STATS) ++stats.ring_operations;
+  ++stats.ring_operations;
   *target = front->hd.next;
   ring_init(front);
   return front;
@@ -413,11 +413,10 @@ static pool * get_uninitialised_pool()
 
 static pool * alloc_pool()
 {
-  if (PRINT_STATS) {
-    ++stats.total_alloced_pools;
-    ++stats.live_pools;
-    if (stats.live_pools > stats.peak_pools)
-      stats.peak_pools = stats.live_pools;
+  ++stats.total_alloced_pools;
+  ++stats.live_pools;
+  if (stats.live_pools > stats.peak_pools)
+    stats.peak_pools = stats.live_pools;
   }
   pool *out = get_uninitialised_pool();
 
@@ -457,6 +456,7 @@ static int free_all_chunks(pool *start_pool)
     free_chunk(p);
     p = next;
     work++;
+    --stats.live_pools;
   } while (p != start_pool);
   return work;
 }
@@ -694,7 +694,7 @@ static inline class classify_boxroot(boxroot root)
 // hot path
 static inline boxroot boxroot_create_classified(value init, class class)
 {
-  if (DEBUG && PRINT_STATS) ++stats.total_create;
+  if (DEBUG) ++stats.total_create;
   value *cell;
   if (LIKELY(class != UNTRACKED)) {
     cell = alloc_boxroot(class);
@@ -720,7 +720,7 @@ value const * boxroot_get(boxroot root)
 // hot path
 static inline void boxroot_delete_classified(boxroot root, class class)
 {
-  if (DEBUG && PRINT_STATS) ++stats.total_delete;
+  if (DEBUG) ++stats.total_delete;
   value *cell = (value *)root;
   if (LIKELY(class != UNTRACKED)) {
     free_boxroot(cell);
@@ -741,7 +741,7 @@ void boxroot_modify(boxroot *root_ref, value new_value)
 {
   boxroot root = *root_ref;
   CAMLassert(root);
-  if (DEBUG && PRINT_STATS) ++stats.total_modify;
+  if (DEBUG) ++stats.total_modify;
   class old_class = classify_boxroot(root);
   class new_class = classify_value(new_value);
 
@@ -825,7 +825,7 @@ static void defrag_pool(pool * pool)
     if (!is_pool_member(v, pool)) continue;
     *freelist_last = current;
     freelist_last = (slot **)current;
-    if (PRINT_STATS) ++stats.defrag_sort;
+    ++stats.defrag_sort;
   }
   *freelist_last = pool_end;
 }
@@ -845,7 +845,7 @@ static inline int scan_pool(scanning_action action, pool *pool, int do_old)
     if (LIKELY((!is_pool_member(s, pool)))) {
       --allocs_to_find;
       value v = (value)s;
-      if (DEBUG && PRINT_STATS && Is_young(v)) ++stats.young_hit;
+      if (DEBUG && Is_young(v)) ++stats.young_hit;
       action(v, (value *)current);
     }
     ++current;
@@ -926,7 +926,19 @@ static int average(long long total_work, int nb_collections) {
     return (total_work + (nb_collections / 2)) / nb_collections;
 }
 
-static void print_stats()
+static int boxroot_used()
+{
+  FOREACH_GLOBAL_RING (global, class, {
+      if (class == UNTRACKED) continue;
+      pool *p = *global;
+      if (p != NULL && (p->hd.alloc_count != 0 || p->hd.next != p)) {
+        return true;
+      }
+    });
+  return false;
+}
+
+void boxroot_print_stats()
 {
 #if PRINT_STATS != 0
   setlocale(LC_ALL, "en_US.UTF-8");
@@ -937,6 +949,8 @@ static void print_stats()
          stats.minor_collections,
          stats.major_collections);
 
+  if (!boxroot_used()) return;
+
   int scanning_work_minor = average(stats.total_scanning_work_minor, stats.minor_collections);
   int scanning_work_major = average(stats.total_scanning_work_major, stats.major_collections);
   long long total_scanning_work = stats.total_scanning_work_minor + stats.total_scanning_work_major;
@@ -944,9 +958,6 @@ static void print_stats()
   int total_mib = kib_of_pools(stats.total_alloced_pools, 2);
   int freed_mib = kib_of_pools(stats.total_freed_pools, 2);
   int peak_mib = kib_of_pools(stats.peak_pools, 2);
-
-  if (total_scanning_work == 0 && stats.total_alloced_pools <= 2)
-    return;
 
   printf("POOL_LOG_SIZE: %d (%'d KiB, %'d roots)\n"
          "USE_MMAP: %d\n"
@@ -1036,33 +1047,45 @@ static void scanning_callback(scanning_action action)
   // is also used for other the statistics of other implementations,
   // we further make sure of this with an extra test, by avoiding
   // calling scan_roots if it has only just been initialised.
-  FOREACH_GLOBAL_RING (global, class, {
-      if (class == UNTRACKED) continue;
-      pool *p = *global;
-      if (p != NULL && (p->hd.alloc_count != 0 || p->hd.next != p)) {
-        scan_roots(action);
-        return;
-      }
-    });
+  if (boxroot_used()) scan_roots(action);
 }
 
+static int setup = 0;
+
 // Must be called to set the hook
-value boxroot_scan_hook_setup(value unit)
+int boxroot_setup()
 {
+  if (setup) return 0;
   boxroot_prev_scan_roots_hook = caml_scan_roots_hook;
   caml_scan_roots_hook = scanning_callback;
   FOREACH_GLOBAL_RING(global, cl, { *global = NULL; });
-  if (populate_pools(YOUNG) == NULL) caml_raise_out_of_memory();
-  if (populate_pools(OLD) == NULL) caml_raise_out_of_memory();
-  return Val_unit;
+  if (!populate_pools(YOUNG) || !populate_pools(OLD)) goto fail;
+  setup = 1;
+  return 1;
+fail:
+  caml_scan_roots_hook = boxroot_prev_scan_roots_hook;
+  return 0;
+}
+
+value boxroot_scan_hook_setup(value unit)
+{
+  if (!boxroot_setup()) caml_failwith("boxroot_scan_hook_setup");
+  return unit;
+}
+
+void boxroot_teardown()
+{
+  if (!setup) return;
+  caml_scan_roots_hook = boxroot_prev_scan_roots_hook;
+  FOREACH_GLOBAL_RING(global, cl, { free_all_chunks(*global); });
+  setup = 0;
 }
 
 value boxroot_scan_hook_teardown(value unit)
 {
-  caml_scan_roots_hook = boxroot_prev_scan_roots_hook;
-  if (PRINT_STATS) print_stats();
-  FOREACH_GLOBAL_RING(global, cl, { free_all_chunks(*global); });
-  return Val_unit;
+  boxroot_teardown();
+  if (PRINT_STATS) boxroot_print_stats();
+  return unit;
 }
 
 /* }}} */
