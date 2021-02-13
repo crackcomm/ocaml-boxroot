@@ -54,13 +54,6 @@
    page.)
    Recommended: 22. */
 #define SUPERBLOCK_LOG_SIZE 22
-/* Defragment nearly-empty pools before attribution?
-   + Better cache locality for successive allocations after lots of
-     deallocations.
-   + Improves early exit during scanning after lots of deallocations.
-   Defragmentation is always done during compaction.
-   Recommended: 0. */
-#define DEFRAG 0
 /* Use __builtin_expect in hot paths? (suggested by looking at the
    generated assembly in godbolt). Can cause swings of 5-10%, and in
    general 1 lets more easily reproduce good performance. Sometimes 1
@@ -218,7 +211,6 @@ struct stats {
   int live_pools; // number of tracked pools
   int peak_pools; // max live pools at any time
   int ring_operations; // Number of times hd.next is mutated
-  int defrag_sort;
   long long is_young; // number of times is_young was called
   long long young_hit; // number of times a young value was encountered
                  // during scanning
@@ -428,8 +420,6 @@ static int free_all_chunks(pool *start_pool)
 
 /* {{{ Pool class management */
 
-static void defrag_pool(pool *);
-
 // Find an available pool for the class; place it in front of the ring
 // of available pools and return it. Return NULL if none was found and
 // the allocation of a new one failed.
@@ -446,11 +436,9 @@ static pool * populate_pools(int for_young)
     // OLD: We reserve the less full pools for re-use as young pools, but
     // we did what we could, so take a less full one anyway.
     new_pool = ring_pop(&pools.old_low);
-    if (DEFRAG) defrag_pool(new_pool);
     // Do not bother with quasi-full pools.
   } else if (pools.free != NULL) {
     new_pool = ring_pop(&pools.free);
-    if (DEFRAG) defrag_pool(new_pool);
   } else {
     // High time we allocate a pool.
     new_pool = alloc_pool();
@@ -746,22 +734,6 @@ static void validate_all_pools()
     });
 }
 
-// sort pool in increasing sequence
-static void defrag_pool(pool * pool)
-{
-  ++stats.defrag_sort;
-  slot *current = pool->roots;
-  slot *pool_end = &pool->roots[POOL_ROOTS_CAPACITY];
-  slot **freelist_last = &pool->hd.free_list;
-  for (; current != pool_end; ++current) {
-    slot v = *current;
-    if (!is_pool_member(v, pool)) continue;
-    *freelist_last = current;
-    freelist_last = (slot **)current;
-  }
-  *freelist_last = pool_end;
-}
-
 #define MINOR_SCANNING_ACTION caml_oldify_one
 #define MAJOR_SCANNING_ACTION caml_darken
 #define COMPACT_SCANNING_ACTION caml_invert_root
@@ -792,10 +764,6 @@ static inline int scan_pool(scanning_action action, pool *pool, int do_old)
 static int scan_pool_dispatch(scanning_action action, pool * pool)
 {
   int work = 0;
-  if (action == &COMPACT_SCANNING_ACTION) {
-    defrag_pool(pool);
-    work += POOL_ROOTS_CAPACITY;
-  }
   // Do a static dispatch whenever useful. The specialisations do not
   // change the semantics of the program compared to the "else"
   // branch.
@@ -897,13 +865,11 @@ void boxroot_print_stats()
   printf("POOL_LOG_SIZE: %d (%'d KiB, %'d roots)\n"
          "USE_SUPERBLOCK: %d\n"
          "SUPERBLOCK_LOG_SIZE: %d\n"
-         "DEFRAG: %d\n"
          "DEBUG: %d\n"
          "WITH_EXPECT: %d\n",
          (int)POOL_LOG_SIZE, kib_of_pools((int)1, 1), (int)POOL_ROOTS_CAPACITY,
          (int)USE_SUPERBLOCK,
          (int)SUPERBLOCK_LOG_SIZE,
-         (int)DEFRAG,
          (int)DEBUG,
          (int)WITH_EXPECT);
 
@@ -932,9 +898,6 @@ void boxroot_print_stats()
          "ring operations per pool: %'d\n",
          stats.ring_operations,
          ring_operations_per_pool);
-
-  printf("defrag (sort): %'d\n",
-         stats.defrag_sort);
 
 #if DEBUG != 0
   printf("total created: %'d\n"
