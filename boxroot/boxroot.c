@@ -488,8 +488,7 @@ static int free_all_chunks(pool *start_pool)
 static pool * populate_pools(int for_young)
 {
   pool **target = for_young ? &pools.young_available : &pools.old_available;
-  if (*target != NULL &&
-      !is_last_elem((*target)->hd.free_list)) {
+  if (*target != NULL && !is_last_elem((*target)->hd.free_list)) {
     return *target;
   }
   pool *new_pool = NULL;
@@ -901,11 +900,11 @@ static int kib_of_pools(int count, int unit)
   return count >> -log_per_pool;
 }
 
-static int average(long long total_work, int nb_collections) {
-    if (nb_collections <= 0)
-        return -1;
-    // round to nearest
-    return (total_work + (nb_collections / 2)) / nb_collections;
+static int average(long long total_work, int nb_collections)
+{
+  if (nb_collections <= 0) return -1;
+  // round to nearest
+  return (total_work + (nb_collections / 2)) / nb_collections;
 }
 
 static int boxroot_used()
