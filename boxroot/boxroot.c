@@ -221,7 +221,7 @@ static int is_minor_scanning(scanning_action action)
 
 static int scan_chunk(scanning_action action, chunk * chunk)
 {
-  int i = 0;
+  size_t i = 0;
   for (; i < CHUNK_ROOTS_CAPACITY; ++i) {
     slot v = chunk->roots[i];
     if (v == NULL) {
