@@ -338,6 +338,7 @@ int boxroot_setup()
 
 value boxroot_scan_hook_setup(value unit)
 {
+  (void)unit;
   boxroot_setup();
   return Val_unit;
 }
@@ -352,6 +353,7 @@ void boxroot_teardown()
 
 value boxroot_scan_hook_teardown(value unit)
 {
+  (void)unit;
   boxroot_teardown();
   return Val_unit;
 }
