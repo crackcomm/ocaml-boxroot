@@ -1,20 +1,18 @@
-module Choice = Config.Choice
-open Choice
+module Ref = Ref_config.Ref
 
 (* a synthetic benchmark with tunable parameters.
 
-make synthetic.bench && \
-  IMPLEM=boxroots NITER=6 \
-  SMALL_ROOTS=1_000 \
-  LARGE_ROOTS=0 \
-  SMALL_ROOT_PROMOTION_RATE=0.01 \
-  LARGE_ROOT_PROMOTION_RATE=0 \
-  ROOT_SURVIVAL_RATE=1 \
-  GC_PROMOTION_RATE=0.1 \
-  GC_SURVIVAL_RATE=0.5 \
-  ./synthetic.bench
+IMPLEM=boxroot N=6 \
+SMALL_ROOTS=1_000 \
+LARGE_ROOTS=0 \
+SMALL_ROOT_PROMOTION_RATE=0.01 \
+LARGE_ROOT_PROMOTION_RATE=0 \
+ROOT_SURVIVAL_RATE=1 \
+GC_PROMOTION_RATE=0.1 \
+GC_SURVIVAL_RATE=0.5 \
+./benchmarks/synthetic.exe
 
- *)
+*)
 
 let wrong_usage () =
   Printf.eprintf "Expected environment variables:
@@ -128,7 +126,7 @@ module Dll = struct
       loop 0 ~found_one:false front
 end
 
-let run () =
+let run n =
   Random.init 42;
   let within rate =
     Random.float 1. < rate
@@ -140,11 +138,7 @@ let run () =
     let large_roots = Dll.empty () in
     let values = Dll.empty () in
 
-    let delete_root choice =
-      Choice.run choice ignore
-    in
-
-    for _minor_generations = 1 to 1 lsl Config.n do
+    for _minor_generations = 1 to 1 lsl n do
       let small_count = ref 0 in
       let large_count = ref 0 in
 
@@ -163,19 +157,19 @@ let run () =
 
       let allocate_small_root () =
         let value = Some !small_count in
-        let root = Choice.return value in
+        let root = Ref.create value in
         incr small_count;
         if within small_root_promotion_rate
         then Dll.push small_roots root
-        else delete_root root
+        else Ref.delete root
       in
       let allocate_large_root () =
         let value = Array.make 512 !large_count in
-        let root = Choice.return value in
+        let root = Ref.create value in
         incr large_count;
         if within large_root_promotion_rate
         then Dll.push large_roots root
-        else delete_root root
+        else Ref.delete root
       in
       let allocate_value () =
         let value = Some !small_roots in
@@ -195,11 +189,11 @@ let run () =
 
       Dll.filter_inplace small_roots (fun root ->
         within root_survival_rate
-        || (delete_root root; false));
+        || (Ref.delete root; false));
 
       Dll.filter_inplace large_roots (fun root ->
         within root_survival_rate
-        || (delete_root root; false));
+        || (Ref.delete root; false));
 
       Dll.filter_inplace values (fun _ ->
         within gc_survival_rate);
@@ -208,9 +202,9 @@ let run () =
 
     (* end of the round: delete all remaining roots *)
     Dll.filter_inplace small_roots (fun root ->
-      delete_root root; false);
+      Ref.delete root; false);
     Dll.filter_inplace large_roots (fun root ->
-      delete_root root; false);
+      Ref.delete root; false);
   done;
 
   if !best_small_count < small_roots_per_minor then
@@ -227,7 +221,12 @@ let run () =
       !best_large_count;
   ()
 
+let n =
+  try int_of_string (Sys.getenv "N")
+  with _ ->
+    Printf.ksprintf failwith "We expected an environment variable N with an integer value."
+
 let () =
-  Printf.printf "%s: %!" Config.implem;
-  run ();
+  Printf.printf "%s: %!" Ref_config.implem_name;
+  run n;
   Printf.printf "%.2fs\n%!" (Sys.time ());

@@ -1,16 +1,16 @@
-module Choice = Config.Choice
-open Choice
+module Choice = Choice_config.Choice
+open Choice.Syntax
 
 let rec insert : type a . a -> a list -> a list Choice.t =
   fun elt xs -> match xs with
-  | [] -> return [elt]
+  | [] -> Choice.return [elt]
   | x :: xs ->
-    choice
-      (return (elt :: x :: xs))
+    Choice.choice
+      (Choice.return (elt :: x :: xs))
       (let+ xs' = insert elt xs in x :: xs')
 
 let rec permutation : type a . a list -> a list Choice.t = function
-  | [] -> return []
+  | [] -> Choice.return []
   | x :: xs ->
     let* xs' = permutation xs in
     insert x xs'
@@ -37,8 +37,13 @@ let count_permutations n =
        counter := Int64.succ !counter);
   !counter
 
+let n =
+  try int_of_string (Sys.getenv "N")
+  with _ ->
+    Printf.ksprintf failwith "We expected an environment variable N with an integer value."
+
 let () =
-  Printf.printf "%s: %!" Config.implem;
-  let count = count_permutations Config.n in
+  Printf.printf "%s: %!" Ref_config.implem_name;
+  let count = count_permutations n in
   Printf.printf "%.2fs\n%!" (Sys.time ());
   Printf.printf "count: %Ld\n%!" count;

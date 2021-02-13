@@ -20,29 +20,42 @@ benchmarks/%.exe: _build/benchmarks/%.exe
 	cp $< $@
 
 EMPTY=
-IMPLEMENTATIONS=\
-  ocaml-persistent \
-  ocaml-ephemeral \
+REF_IMPLS=\
+  ocaml \
   gc \
-  boxroots \
-  global-roots \
-  generational-global-roots \
-  fake-boxroots \
+  global \
+  generational \
+  boxroot \
   $(EMPTY)
 
 run_bench = \
-  export NITER=$(2) $(foreach IMPLEM, $(IMPLEMENTATIONS), \
-    && (echo "---"; IMPLEM=$(IMPLEM) $(1)) \
+  echo "Benchmark: $(1)" \
+  && echo "---" \
+  $(foreach REF, $(REF_IMPLS), \
+    && (REF=$(REF) $(2); echo "---") \
   )
 
 .PHONY: run
 run: $(BENCHMARKS)
-	$(call run_bench,benchmarks/perm_count.exe,10)
-# Note: synthetic.bench is not run by default, it is too experimental for now.
+	$(call run_bench,"perm_count", \
+	  CHOICE=persistent N=10 ./benchmarks/perm_count.exe)
+	$(call run_bench,"synthetic", \
+	    N=8 \
+	    CHOICE=ephemeral \
+	    SMALL_ROOTS=10_000 \
+	    LARGE_ROOTS=0 \
+	    SMALL_ROOT_PROMOTION_RATE=0 \
+	    LARGE_ROOT_PROMOTION_RATE=0 \
+	    ROOT_SURVIVAL_RATE=0.5 \
+	    GC_PROMOTION_RATE=0.1 \
+	    GC_SURVIVAL_RATE=0.5 \
+	    ./benchmarks/synthetic.exe \
+	)
+
 
 .PHONY: test-boxroot
 test-boxroot: benchmarks/perm_count.exe
-	NITER=10 IMPLEM=boxroots benchmarks/perm_count.exe
+	N=10 REF=boxroot CHOICE=ephemeral benchmarks/perm_count.exe
 
 clean:
 	rm -fR _build
@@ -51,39 +64,45 @@ clean:
 
 # Build rules
 
-C_HEADERS=$(addprefix _build/,$(wildcard boxroot/*.h benchmarks/lib-choice/*.h))
+C_HEADERS=$(addprefix _build/,$(wildcard \
+   boxroot/*.h \
+   benchmarks/lib-ref/*.h \
+   benchmarks/lib-choice/*.h))
 
 BOXROOT_LIB = $(addprefix _build/boxroot/,\
   boxroot.o \
 )
 
-CHOICE_MODULES = $(addprefix _build/benchmarks/lib-choice/,\
-  choice_ocaml_persistent.cmx \
-  choice_ocaml_ephemeral.cmx \
-  abstract_value.o \
-  choice_gc_stubs.o choice_gc.cmx \
-  choice_global_roots_stubs.o choice_global_roots.cmx \
-  choice_generational_global_roots_stubs.o choice_generational_global_roots.cmx \
-  fake_boxroot.o choice_fake_boxroots_stubs.o choice_fake_boxroots.cmx \
-  choice_boxroots_stubs.o choice_boxroots.cmx \
-  config.cmx \
+REF_MODULES = $(addprefix _build/benchmarks/lib-ref/,\
+  abstract_out_of_heap.o \
+  global.o global_ref.cmx \
+  generational.o generational_ref.cmx \
+  gc.o gc_ref.cmx \
+  boxroot.o boxroot_ref.cmx \
+  ocaml_ref.cmx \
+  ref_config.cmx \
 )
 
-LIB_DIRS=boxroot benchmarks/lib-choice
+CHOICE_MODULES = $(addprefix _build/benchmarks/lib-choice/,\
+  choice_persistent.cmx \
+  choice_ephemeral.cmx \
+  choice_config.cmx \
+)
+
+LIB_DIRS=boxroot benchmarks/lib-ref benchmarks/lib-choice
 INCLUDE_LIB_DIRS=$(foreach DIR,$(LIB_DIRS), -I _build/$(DIR))
 
 # for debugging
 .PHONY: show-deps
 show-deps:
-	@echo $(C_HEADERS) $(BOXROOT_LIB) $(CHOICE_MODULES)
+	@echo $(C_HEADERS) $(BOXROOT_LIB) $(REF_MODULES) $(CHOICE_MODULES)
 
-%.exe: $(BOXROOT_LIB) $(CHOICE_MODULES) %.cmx
+%.exe: $(BOXROOT_LIB) $(REF_MODULES) $(CHOICE_MODULES) %.cmx
 	@mkdir -p $(shell dirname ./$@)
 	ocamlopt -runtime-variant i $(INCLUDE_LIB_DIRS) -g -o $@ $^
-# see http://www.gnu.org/software/make/manual/html_node/Chained-Rules.html
-.PRECIOUS: %.exe %.cmx
-.SECONDARY: $(BOXROOT_LIB) $(CHOICE_MODULES)
 
+# see http://www.gnu.org/software/make/manual/html_node/Chained-Rules.html
+.PRECIOUS: %.exe %.cmx %.o
 # copy rules
 .PRECIOUS: _build/%.c _build/%.h _build/%.ml
 _build/%.c: %.c
