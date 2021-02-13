@@ -637,7 +637,7 @@ void boxroot_modify(boxroot *root, value new_value)
   slot *s = (slot *)*root;
   CAMLassert(s);
   if (DEBUG) ++stats.total_modify;
-  class is_new_young_block = is_young_block(new_value);
+  int is_new_young_block = is_young_block(new_value);
   pool *p;
   if (!is_new_young_block || (p = get_pool_header(s))->hd.class == YOUNG) {
     *(value *)s = new_value;
