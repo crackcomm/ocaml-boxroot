@@ -291,8 +291,8 @@ static void boxroot_scan_roots(scanning_action action)
 static int mib_of_chunks(int count)
 {
   int log_per_chunk = CHUNK_LOG_SIZE - 20;
-  if (log_per_chunk >= 0) return count << log_per_chunk;
-  if (log_per_chunk < 0) return count >> -log_per_chunk;
+  if (log_per_chunk >= 0)      return count << log_per_chunk;
+  else /* log_per_chunk < 0 */ return count >> -log_per_chunk;
 }
 
 static int average(int total_work, int nb_collections) {
