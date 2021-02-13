@@ -278,16 +278,11 @@ static inline pool * get_pool_header(slot *v)
 
 // Return true iff v shares the same msbs as p and is not an
 // immediate.
-static inline int is_pool_member_nostats(slot v, pool *p)
-{
-  return (uintptr_t)p == ((uintptr_t)v & ~((uintptr_t)POOL_SIZE - 2));
-}
-
 // hot path
 static inline int is_pool_member(slot v, pool *p)
 {
   if (DEBUG) ++stats.is_pool_member;
-  return is_pool_member_nostats(v, p);
+  return (uintptr_t)p == ((uintptr_t)v & ~((uintptr_t)POOL_SIZE - 2));
 }
 
 // hot path
@@ -648,12 +643,6 @@ static inline slot * alloc_slot(int for_young_block)
   pool *p = for_young_block ? pools.young_available : pools.old_available;
   if (DEBUG) assert(p != NULL);
   slot *new_root = p->hd.free_list;
-  if (DEBUG) {
-    int a = new_root != &p->roots[POOL_ROOTS_CAPACITY];
-    int b = !is_last_elem(new_root);
-    int c = p->hd.alloc_count != POOL_ROOTS_CAPACITY;
-    assert(a == b && b == c);
-  }
   if (LIKELY(!is_last_elem(new_root))) {
     p->hd.free_list = (slot *)*new_root;
     p->hd.alloc_count++;
@@ -770,7 +759,8 @@ static void validate_pool(pool *pool)
   int alloc_count = 0;
   for(int i = 0; i < POOL_ROOTS_CAPACITY; i++) {
     slot s = pool->roots[i];
-    if (!is_pool_member_nostats(s, pool)) {
+    --stats.is_pool_member;
+    if (!is_pool_member(s, pool)) {
       value v = (value)s;
       if (pool->hd.class != YOUNG) assert(!Is_block(v) || !Is_young(v));
       ++alloc_count;
