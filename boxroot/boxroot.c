@@ -843,6 +843,7 @@ static int in_minor_collection = 0;
 // returns the amount of work done
 static inline int scan_pool(scanning_action action, pool *pool, int do_old)
 {
+  (void)do_old;/* TODO: not implemented */
   int allocs_to_find = pool->hd.alloc_count;
   slot *current = pool->roots;
   while (allocs_to_find) {
