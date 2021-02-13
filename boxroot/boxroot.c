@@ -47,27 +47,12 @@
    - Slower than aligned_alloc for small pool sizes (independently of
      superblock sizes?). Note: the current promotion/demotion
      heuristics work better with larger pools.
-
    Recommended: 1. */
 #define USE_SUPERBLOCK 1
 /* Size of a superblock if USE_SUPERBLOCK is 1. (21 = 2MB, a huge
    page.)
    Recommended: 22. */
 #define SUPERBLOCK_LOG_SIZE 22
-/* Use __builtin_expect in hot paths? (suggested by looking at the
-   generated assembly in godbolt). Can cause swings of 5-10%, and in
-   general 1 lets more easily reproduce good performance. Sometimes 1
-   is slow and 2 is faster => probably shows effect of code
-   (mis)alignment.
-   0 = off
-   1 = on
-   2 = invert
-   Recommended: 1. */
-#define WITH_EXPECT 1
-/* A potentially faster is_young test. Little effect in my
-   experiments.
-   Recommended: 0. */
-#define FAST_IS_YOUNG 0
 
 /* }}} */
 
@@ -80,17 +65,6 @@
 
 #if PRINT_STATS != 0
 #include <locale.h>
-#endif
-
-#if WITH_EXPECT == 0
-  #define LIKELY(a) (a)
-  #define UNLIKELY(a) (a)
-#elif WITH_EXPECT == 1
-  #define LIKELY(a) __builtin_expect(!!(a),1)
-  #define UNLIKELY(a) __builtin_expect(!!(a),0)
-#elif WITH_EXPECT == 2
-  #define LIKELY(a) __builtin_expect(!!(a),0)
-  #define UNLIKELY(a) __builtin_expect(!!(a),1)
 #endif
 
 #define CHUNK_LOG_SIZE (USE_SUPERBLOCK ? SUPERBLOCK_LOG_SIZE : POOL_LOG_SIZE)
@@ -252,17 +226,7 @@ static inline int is_last_elem(slot *v)
 static inline int is_young_block(value v)
 {
   if (DEBUG) ++stats.is_young;
-#if FAST_IS_YOUNG != 0
-  /* a < x <= b  <=>  (unsigned)(b-x) < b-a  (from Hacker's Delight)
-     Note that b cannot be the address of a value because the header would be in b-1. */
-  uintptr_t x = (uintptr_t)caml_young_end - (uintptr_t)v;
-  // Borrowed from Stephen Dolan
-  uintptr_t rotated = (x << ((sizeof x) * 8 - 1)) | (x >> 1);
-  uintptr_t half_minor_size = ((uintptr_t)caml_young_end - (uintptr_t)caml_young_start) >> 1;
-  return rotated < half_minor_size;
-#else
   return Is_block(v) && Is_young(v);
-#endif
 }
 
 /* }}} */
@@ -580,6 +544,14 @@ static void promote_young_pools()
 
 /* {{{ Allocation, deallocation */
 
+#if defined(__GNUC__)
+#define LIKELY(a) __builtin_expect(!!(a),1)
+#define UNLIKELY(a) __builtin_expect(!!(a),0)
+#else
+#define LIKELY(a) (a)
+#define UNLIKELY(a) (a)
+#endif
+
 static slot * alloc_slot_slow(int);
 
 // hot path
@@ -741,9 +713,8 @@ static void validate_all_pools()
 static int in_minor_collection = 0;
 
 // returns the amount of work done
-static inline int scan_pool(scanning_action action, pool *pool, int do_old)
+static inline int scan_pool(scanning_action action, pool *pool)
 {
-  (void)do_old;/* TODO: not implemented */
   int allocs_to_find = pool->hd.alloc_count;
   slot *current = pool->roots;
   while (allocs_to_find) {
@@ -768,11 +739,11 @@ static int scan_pool_dispatch(scanning_action action, pool * pool)
   // change the semantics of the program compared to the "else"
   // branch.
   if (in_minor_collection && action == &MINOR_SCANNING_ACTION) {
-    work += scan_pool(MINOR_SCANNING_ACTION, pool, 0);
+    work += scan_pool(MINOR_SCANNING_ACTION, pool);
   } else if (!in_minor_collection && action == &MAJOR_SCANNING_ACTION) {
-    work += scan_pool(MAJOR_SCANNING_ACTION, pool, 1);
+    work += scan_pool(MAJOR_SCANNING_ACTION, pool);
   } else {
-    work += scan_pool(action, pool, !in_minor_collection);
+    work += scan_pool(action, pool);
   }
   return work;
 }
@@ -866,12 +837,11 @@ void boxroot_print_stats()
          "USE_SUPERBLOCK: %d\n"
          "SUPERBLOCK_LOG_SIZE: %d\n"
          "DEBUG: %d\n"
-         "WITH_EXPECT: %d\n",
+         "WITH_EXPECT: 1\n",
          (int)POOL_LOG_SIZE, kib_of_pools((int)1, 1), (int)POOL_ROOTS_CAPACITY,
          (int)USE_SUPERBLOCK,
          (int)SUPERBLOCK_LOG_SIZE,
-         (int)DEBUG,
-         (int)WITH_EXPECT);
+         (int)DEBUG);
 
   printf("CHUNK_SIZE: %'d kiB (%'d pools)\n"
          "CHUNK_ALIGNMENT: %'d kiB\n"
