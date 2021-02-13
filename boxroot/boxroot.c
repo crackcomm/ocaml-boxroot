@@ -225,7 +225,7 @@ static const class global_ring_classes[] =
     }                                                                   \
   } while (0)
 
-static struct stats {
+struct stats {
   int minor_collections;
   int major_collections;
   int total_create;
