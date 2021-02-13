@@ -10,4 +10,7 @@ value const * boxroot_get(boxroot);
 void boxroot_delete(boxroot);
 void boxroot_modify(boxroot *, value);
 
+int boxroot_setup();
+void boxroot_teardown();
+
 #endif // BOXROOT_H

@@ -19,14 +19,18 @@ static void *aligned_alloc(size_t alignment, size_t size) {
 }
 #endif
 
+#ifdef BOXROOT_STATS
 static const int do_print_stats = 1;
+#else
+static const int do_print_stats = 0;
+#endif
 
 typedef void * slot;
 
 #define CHUNK_LOG_SIZE 12 // 4KB
 #define CHUNK_SIZE (1 << CHUNK_LOG_SIZE)
 #define HEADER_SIZE 5
-#define CHUNK_ROOTS_CAPACITY (CHUNK_SIZE / sizeof(slot) - HEADER_SIZE)
+#define CHUNK_ROOTS_CAPACITY ((int)(CHUNK_SIZE / sizeof(slot) - HEADER_SIZE))
 #define LOW_CAPACITY_THRESHOLD 50 // 50% capacity before promoting a
                                   // young chunk.
 
@@ -287,8 +291,8 @@ static void boxroot_scan_roots(scanning_action action)
 static int mib_of_chunks(int count)
 {
   int log_per_chunk = CHUNK_LOG_SIZE - 20;
-  if (log_per_chunk >= 0) return count << log_per_chunk;
-  if (log_per_chunk < 0) return count >> -log_per_chunk;
+  if (log_per_chunk >= 0)      return count << log_per_chunk;
+  else /* log_per_chunk < 0 */ return count >> -log_per_chunk;
 }
 
 static int average(int total_work, int nb_collections) {
@@ -325,18 +329,33 @@ static void print_stats()
 }
 
 // Must be called to set the hook
-void boxroot_scan_hook_setup()
+int boxroot_setup()
 {
   boxroot_prev_scan_roots_hook = caml_scan_roots_hook;
   caml_scan_roots_hook = boxroot_scan_roots;
+  return 1;
 }
 
-void boxroot_scan_hook_teardown()
+value boxroot_scan_hook_setup(value unit)
+{
+  (void)unit;
+  boxroot_setup();
+  return Val_unit;
+}
+
+void boxroot_teardown()
 {
   caml_scan_roots_hook = boxroot_prev_scan_roots_hook;
   boxroot_prev_scan_roots_hook = NULL;
   if (do_print_stats) print_stats();
   //TODO: free all chunks
+}
+
+value boxroot_scan_hook_teardown(value unit)
+{
+  (void)unit;
+  boxroot_teardown();
+  return Val_unit;
 }
 
 // Boxroot API implementation
