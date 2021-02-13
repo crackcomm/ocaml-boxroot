@@ -41,7 +41,7 @@
     Recommended: 31.*/
 #define HIGH_COUNT_THRESHOLD 31
 /* Print statistics on teardown? */
-#define PRINT_STATS 1
+#define PRINT_STATS (defined(BOXROOT_STATS))
 /* Check integrity of pool structure after each scan, and print
    additional statistics? (slow) */
 #define DEBUG 0
@@ -147,8 +147,10 @@ struct header {
   class class;
 };
 
+static_assert(POOL_SIZE / sizeof(slot) <= INT_MAX, "pool size too large");
+
 #define POOL_ROOTS_CAPACITY                                 \
-  ((POOL_SIZE - sizeof(struct header)) / sizeof(slot) - 1)
+  ((int)((POOL_SIZE - sizeof(struct header)) / sizeof(slot) - 1))
 /* &pool->roots[POOL_ROOTS_CAPACITY] can end up as a placeholder value
    in the freelist to denote the last element of the freelist,
    starting from after releasing from a full pool for the first
@@ -164,7 +166,6 @@ typedef struct pool {
   uintptr_t end;// unused
 } pool;
 
-static_assert(POOL_ROOTS_CAPACITY <= INT_MAX, "capacity too large");
 static_assert(sizeof(pool) == POOL_SIZE, "bad pool size");
 
 /* }}} */
@@ -914,7 +915,8 @@ static int kib_of_pools(int count, int unit)
 {
   int log_per_pool = POOL_LOG_SIZE - unit * 10;
   if (log_per_pool >= 0) return count << log_per_pool;
-  if (log_per_pool < 0) return count >> -log_per_pool;
+  /* log_per_pool < 0) */
+  return count >> -log_per_pool;
 }
 
 static int average(long long total_work, int nb_collections) {
