@@ -645,7 +645,7 @@ void boxroot_modify(boxroot *root, value new_value)
   }
   free_slot(s, p);
   *root = root_create_classified(new_value, is_new_young_block);
-  // Note: *root_ref can become NULL, which must be checked explicitly
+  // Note: *root can become NULL, which must be checked explicitly
   // (in Rust, check and panic here).
 }
 
