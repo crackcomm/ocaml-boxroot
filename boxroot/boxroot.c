@@ -41,8 +41,9 @@
     Recommended: 31.*/
 #define HIGH_COUNT_THRESHOLD 31
 /* Print statistics on teardown? */
-#define PRINT_STATS 0
-/* Check integrity of pool structure after each scan? (slow) */
+#define PRINT_STATS 1
+/* Check integrity of pool structure after each scan, and print
+   additional statistics? (slow) */
 #define DEBUG 0
 /* Allocate with mmap? */
 #define USE_MMAP 0
@@ -66,7 +67,7 @@
    - Slower than aligned_alloc for small pool sizes (independently of
      superblock sizes?). */
 #define USE_SUPERBLOCK 1
-#define SUPERBLOCK_LOG_SIZE 25 // 21 = 2MB (a huge page)
+#define SUPERBLOCK_LOG_SIZE 21 // 21 = 2MB (a huge page)
 /* Defragment during compaction?
    + Better cache locality for successive allocations after lots of
      deallocations.
@@ -247,53 +248,43 @@ static struct {
 
 /* {{{ Tests in the hot path */
 
-/*
-static void printbinary(uintptr_t n)
-{
-  printf("\n");
-  for (int i = 63; i >= 0; i--) {
-    if (n & ((uintptr_t)1 << i))
-      printf("1");
-    else
-      printf("0");
-  }
-  printf("\n");
-}
-*/
-
 // hot path
 static inline pool * get_pool_header(slot v)
 {
-  if (PRINT_STATS) ++stats.get_pool_header;
+  if (DEBUG && PRINT_STATS) ++stats.get_pool_header;
   return (pool *)((uintptr_t)v & ~((uintptr_t)POOL_SIZE - 1));
 }
 
 // hot path
 // Return true iff v shares the same msbs as p and is not an
 // immediate.
-static inline int is_pool_member(slot v, pool *p)
+static inline int is_pool_member_nostats(slot v, pool *p)
 {
-  if (PRINT_STATS) ++stats.is_pool_member;
   /* 0bxxxxx0000001 */
   return (uintptr_t)p == ((uintptr_t)v & ~((uintptr_t)POOL_SIZE - 2));
+}
+static inline int is_pool_member(slot v, pool *p)
+{
+  if (DEBUG && PRINT_STATS) ++stats.is_pool_member;
+  return is_pool_member_nostats(v, p);
 }
 
 // hot path
 static inline int is_last_elem(slot *v)
 {
-  if (PRINT_STATS) ++stats.is_last_elem;
+  if (DEBUG && PRINT_STATS) ++stats.is_last_elem;
   return ((uintptr_t)(v + 1) & (POOL_SIZE - 1)) == 0;
 }
 
 // hot path
 static inline int is_young(value v)
 {
-  if (PRINT_STATS) ++stats.is_young;
+  if (DEBUG && PRINT_STATS) ++stats.is_young;
 #if FAST_IS_YOUNG != 0
-  /* a < x <= b  <=>  (unsigned)(b-x) < b-a  (see Hacker's Delight)
-     Note that b cannot be the address of a value because the header would be in b-1.
-   */
-  return (unsigned int)((value *)v - (value *)caml_young_start) < caml_minor_heap_wsz;
+  /* a < x <= b  <=>  (unsigned)(b-x) < b-a  (from Hacker's Delight)
+     Note that b cannot be the address of a value because the header would be in b-1. */
+  return (unsigned int)((uintptr_t)caml_young_end - (uintptr_t)v) < (unsigned int)(
+    (uintptr_t)caml_young_end - (uintptr_t)caml_young_start);
 #else
   return Is_young(v);
 #endif
@@ -499,7 +490,6 @@ static pool * populate_pools(class class)
     // High time we allocate a pool.
     new_pool = alloc_pool();
   }
-  // allocation failed
   if (new_pool == NULL) return NULL;
   new_pool->hd.class = class;
   ring_concat(new_pool, target);
@@ -703,7 +693,7 @@ static inline class classify_boxroot(boxroot root)
 // hot path
 static inline boxroot boxroot_create_classified(value init, class class)
 {
-  if (PRINT_STATS) ++stats.total_create;
+  if (DEBUG && PRINT_STATS) ++stats.total_create;
   value *cell;
   if (LIKELY(class != UNTRACKED)) {
     cell = alloc_boxroot(class);
@@ -729,7 +719,7 @@ value const * boxroot_get(boxroot root)
 // hot path
 static inline void boxroot_delete_classified(boxroot root, class class)
 {
-  if (PRINT_STATS) ++stats.total_delete;
+  if (DEBUG && PRINT_STATS) ++stats.total_delete;
   value *cell = (value *)root;
   if (LIKELY(class != UNTRACKED)) {
     free_boxroot(cell);
@@ -741,7 +731,7 @@ static inline void boxroot_delete_classified(boxroot root, class class)
 // hot path
 void boxroot_delete(boxroot root)
 {
-  assert(root);
+  CAMLassert(root);
   boxroot_delete_classified(root, classify_boxroot(root));
 }
 
@@ -749,8 +739,8 @@ void boxroot_delete(boxroot root)
 void boxroot_modify(boxroot *root_ref, value new_value)
 {
   boxroot root = *root_ref;
-  assert(root);
-  if (PRINT_STATS) ++stats.total_modify;
+  CAMLassert(root);
+  if (DEBUG && PRINT_STATS) ++stats.total_modify;
   class old_class = classify_boxroot(root);
   class new_class = classify_value(new_value);
 
@@ -794,9 +784,9 @@ static void validate_pool(pool *pool)
   int alloc_count = 0;
   for(int i = 0; i < POOL_ROOTS_CAPACITY; i++) {
     slot v = pool->roots[i];
-    if (!is_pool_member(v, pool)) {
+    if (!is_pool_member_nostats(v, pool)) {
       if (pool->hd.class != YOUNG && !Is_block((value)v))
-        assert(!is_young((value)v));
+        assert(!Is_young((value)v));
       ++alloc_count;
     }
   }
@@ -854,7 +844,7 @@ static inline int scan_pool(scanning_action action, pool *pool, int do_old)
     if (LIKELY((!is_pool_member(s, pool)))) {
       --allocs_to_find;
       value v = (value)s;
-      if (PRINT_STATS && Is_young(v)) ++stats.young_hit;
+      if (DEBUG && PRINT_STATS && Is_young(v)) ++stats.young_hit;
       action(v, (value *)current);
     }
     ++current;
@@ -994,13 +984,6 @@ static void print_stats()
          scanning_work_major,
          total_scanning_work, stats.total_scanning_work_minor, stats.total_scanning_work_major);
 
-  printf("total created: %'d\n"
-         "total deleted: %'d\n"
-         "total modified: %'d\n",
-         stats.total_create,
-         stats.total_delete,
-         stats.total_modify);
-
   printf("total ring operations: %'d\n"
          "ring operations per pool: %'d\n",
          stats.ring_operations,
@@ -1008,6 +991,14 @@ static void print_stats()
 
   printf("defrag (sort): %'d\n",
          stats.defrag_sort);
+
+#if DEBUG != 0
+  printf("total created: %'d\n"
+         "total deleted: %'d\n"
+         "total modified: %'d\n",
+         stats.total_create,
+         stats.total_delete,
+         stats.total_modify);
 
   printf("is_young: %'lld\n"
          "young_hit: %d%%\n"
@@ -1019,6 +1010,7 @@ static void print_stats()
          stats.get_pool_header,
          stats.is_pool_member,
          stats.is_last_elem);
+#endif
 }
 
 /* }}} */
@@ -1044,7 +1036,6 @@ static void scanning_callback(scanning_action action)
   // calling scan_roots if it has only just been initialised.
   FOREACH_GLOBAL_RING (global, class, {
       if (class == UNTRACKED) continue;
-      if (global == NULL) continue;//cleanup
       pool *p = *global;
       if (p != NULL && (p->hd.alloc_count != 0 || p->hd.next != p)) {
         scan_roots(action);
@@ -1061,17 +1052,6 @@ value boxroot_scan_hook_setup(value unit)
   FOREACH_GLOBAL_RING(global, cl, { *global = NULL; });
   if (populate_pools(YOUNG) == NULL) caml_raise_out_of_memory();
   if (populate_pools(OLD) == NULL) caml_raise_out_of_memory();
-  /*
-  for (int i = 0; i < POOL_ROOTS_CAPACITY; i++) {
-    if (is_alloc_threshold(i)) printf("%d\n", i);
-  }
-  int last = -1;
-  for (int i = 0; i < POOL_ROOTS_CAPACITY; i++) {
-    int threshold = (i + THRESHOLD_SIZE - 1) / THRESHOLD_SIZE;
-    if (last == threshold) continue;
-    last = threshold;
-    printf("%d %d\n", threshold, i);
-  }*/
   return Val_unit;
 }
 
