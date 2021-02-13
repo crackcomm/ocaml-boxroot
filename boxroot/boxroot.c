@@ -37,20 +37,6 @@
    additional statistics? (slow)
    Recommended: 0. */
 #define DEBUG 0
-/* Allocate with mmap? (not fully implemented)
-   Recommended: 0. */
-#define USE_MMAP 0
-/* Advise to use transparent huge pages? (Linux)
-
-   Little effect in my experiments. This is to investigate further:
-   indeed the options "thp:always,metadata_thp:auto" for jemalloc
-   consistently brings it faster than ocaml-ephemeral. FTR:
-   `MALLOC_CONF="thp:always,metadata_thp:auto"                 \
-   LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2       \
-   make run`. (probably due to the malloc in value_list_functor.h)
-
-   Recommended: 0. */
-#define USE_MADV_HUGEPAGE 0
 /* Whether to pre-allocate several pools at once. Free pools are put
    aside and re-used instead of being immediately freed. Does not
    support memory reclamation yet.
@@ -103,12 +89,6 @@
 #include <locale.h>
 #endif
 
-// for MADV_HUGEPAGE
-#define HUGEPAGE_LOG_SIZE 21 // 2MB on x86_64 Linux
-#if USE_MADV_HUGEPAGE != 0
-  #include <sys/mman.h>
-#endif
-
 #if WITH_EXPECT == 0
   #define LIKELY(a) (a)
   #define UNLIKELY(a) (a)
@@ -124,14 +104,10 @@
 
 static_assert(CHUNK_LOG_SIZE >= POOL_LOG_SIZE,
               "chunk size smaller than pool size");
-static_assert(!USE_MADV_HUGEPAGE || CHUNK_LOG_SIZE >= HUGEPAGE_LOG_SIZE,
-              "chunk size smaller than a huge page");
 
 #define POOL_SIZE ((size_t)1 << POOL_LOG_SIZE)
 #define CHUNK_SIZE ((size_t)1 << CHUNK_LOG_SIZE)
-#define CHUNK_ALIGNMENT                                         \
-  ((USE_MADV_HUGEPAGE && POOL_LOG_SIZE < HUGEPAGE_LOG_SIZE) ?   \
-   ((size_t)1 << HUGEPAGE_LOG_SIZE) : POOL_SIZE)
+#define CHUNK_ALIGNMENT POOL_SIZE
 #define POOLS_PER_CHUNK (CHUNK_SIZE / POOL_SIZE)
 
 /* }}} */
@@ -312,33 +288,15 @@ static void *aligned_alloc(size_t alignment, size_t size) {
 static void * alloc_chunk()
 {
   void *p = NULL;
-  if (USE_MMAP) {
-    uintptr_t bitmask = ((uintptr_t)CHUNK_ALIGNMENT) - 1;
-    p = mmap(0, CHUNK_SIZE + CHUNK_ALIGNMENT, PROT_READ | PROT_WRITE,
-                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (p == MAP_FAILED) p = NULL;
-    // align p
-    p = (void *)(((uintptr_t)p + bitmask) & ~bitmask);
-    // TODO: release unused portions
-  } else {
-    p = aligned_alloc(CHUNK_ALIGNMENT, CHUNK_SIZE); // TODO: not portable
-  }
+  p = aligned_alloc(CHUNK_ALIGNMENT, CHUNK_SIZE); // TODO: not portable
   if (p == NULL) return NULL;
-#if USE_MADV_HUGEPAGE != 0
-  madvise(p, CHUNK_SIZE, MADV_HUGEPAGE);
-#endif
   ++stats.total_alloced_chunks;
   return p;
 }
 
 static void free_chunk(void *p)
 {
-  if (USE_MMAP) {
-    // TODO: not implemented
-    //munmap(p, CHUNK_SIZE);
-  } else {
-    free(p);
-  }
+  free(p);
 }
 
 /* }}} */
@@ -937,16 +895,12 @@ void boxroot_print_stats()
   if (!boxroot_used() && total_scanning_work == 0) return;
 
   printf("POOL_LOG_SIZE: %d (%'d KiB, %'d roots)\n"
-         "USE_MMAP: %d\n"
-         "USE_MADV_HUGEPAGE: %d\n"
          "USE_SUPERBLOCK: %d\n"
          "SUPERBLOCK_LOG_SIZE: %d\n"
          "DEFRAG: %d\n"
          "DEBUG: %d\n"
          "WITH_EXPECT: %d\n",
          (int)POOL_LOG_SIZE, kib_of_pools((int)1, 1), (int)POOL_ROOTS_CAPACITY,
-         (int)USE_MMAP,
-         (int)USE_MADV_HUGEPAGE,
          (int)USE_SUPERBLOCK,
          (int)SUPERBLOCK_LOG_SIZE,
          (int)DEFRAG,
