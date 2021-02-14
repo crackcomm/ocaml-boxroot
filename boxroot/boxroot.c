@@ -615,7 +615,12 @@ boxroot boxroot_create(value init)
   return root_create_classified(init, is_young_block(init));
 }
 
-value const * boxroot_get(boxroot root)
+value boxroot_get(boxroot root)
+{
+  return *(value *)root;
+}
+
+value const * boxroot_get_ref(boxroot root)
 {
   return (value *)root;
 }

@@ -29,7 +29,8 @@ provided as follows.
 
 ```c
 boxroot boxroot_create(value);
-value const * boxroot_get(boxroot);
+value boxroot_get(boxroot);
+value const * boxroot_get_ref(boxroot);
 void boxroot_delete(boxroot);
 void boxroot_modify(boxroot *, value);
 ```

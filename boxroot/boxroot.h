@@ -8,15 +8,18 @@ typedef struct boxroot_private* boxroot;
 /* `boxroot_create(v)` allocates a new boxroot initialised to the
    value `v`. This value will be considered as a root by the OCaml GC
    as long as the boxroot lives or until it is modified. A return
-   value of `NULL` indicates an allocation failure. */
+   value of `NULL` indicates an failure of allocation of the backing
+   store. */
 boxroot boxroot_create(value);
 
-/* `boxroot_get(r)` returns a pointer to a memory cell containing the
-   value kept alive by `r`, that gets updated whenver the value is
-   moved by the OCaml GC. The pointer becomes invalid after any call
-   to `boxroot_delete(r)` or `boxroot_modify(&r,v)`. The argument must
-   be non-null. */
-value const * boxroot_get(boxroot);
+/* `boxroot_get(r)` returns the contained value, subject to the usual
+   discipline for non-rooted values. `boxroot_get_ref(r)` returns a
+   pointer to a memory cell containing the value kept alive by `r`,
+   that gets updated whenever its block is moved by the OCaml GC. The
+   pointer becomes invalid after any call to `boxroot_delete(r)` or
+   `boxroot_modify(&r,v)`. The argument must be non-null. */
+value boxroot_get(boxroot);
+value const * boxroot_get_ref(boxroot);
 
 /* `boxroot_delete(r)` desallocates the boxroot `r`. The value is no
    longer considered as a root by the OCaml GC. The argument must be
@@ -24,14 +27,16 @@ value const * boxroot_get(boxroot);
 void boxroot_delete(boxroot);
 
 /* `boxroot_modify(&r,v)` changes the value kept alive by the boxroot
-   `r` to `v`. It is equivalent to the following, albeit in slightly
-   more efficient manner:
+   `r` to `v`. It is equivalent to the following, albeit more
+   efficient:
    ```
    boxroot_delete(r);
    r = boxroot_create(v);
    ```
-   In particular, the value of `r` must be checked afterwards, as a
-   value of `NULL` will denote an allocation failure. */
+   In particular, the root can be reallocated. The value of `r` must
+   therefore be checked afterwards, since a value of `NULL` will
+   denote an allocation failure. This reallocation, if needed, occurs
+   at most once between two minor collections. */
 void boxroot_modify(boxroot *, value);
 
 
