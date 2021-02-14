@@ -3,6 +3,7 @@
 // This is emacs folding-mode
 
 #include <assert.h>
+#include <errno.h>
 #include <limits.h>
 #include <stdarg.h>
 #include <stddef.h>
@@ -233,25 +234,22 @@ static inline int is_young_block(value v)
 
 /* {{{ Platform-specific allocation */
 
-#ifdef __APPLE__
-static void *aligned_alloc(size_t alignment, size_t size) {
-  void *memptr = NULL;
-  posix_memalign(&memptr, alignment, size);
-  return memptr;
-}
-#endif
-
 static void * alloc_chunk()
 {
   void *p = NULL;
-  p = aligned_alloc(CHUNK_ALIGNMENT, CHUNK_SIZE); // TODO: not portable
-  if (p == NULL) return NULL;
+  // TODO: portability?
+  // Win32: p = _aligned_malloc(size, alignment);
+  int err = posix_memalign(&p, CHUNK_ALIGNMENT, CHUNK_SIZE);
+  assert(err != EINVAL);
+  if (err == ENOMEM) return NULL;
+  assert(p != NULL);
   ++stats.total_alloced_chunks;
   return p;
 }
 
 static void free_chunk(void *p)
 {
+  // Win32: _aligned_free(p);
   free(p);
 }
 
