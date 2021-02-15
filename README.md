@@ -1,27 +1,43 @@
-# Experimenting with OCaml GC root registration
+# Boxroot: fast movable roots for the OCaml C interface
 
 This repository hosts an experiment with a different root-registration
 API for the OCaml garbage collector. The new kind of roots are called
-"boxroot" (the name is suggested by the `Box<T>` type of Rust).
+`boxroot` (boxed roots).
 
 The traditional root-registration APIs let users decide which existing
 parts of memory should be considered as new roots by the runtime. With
-boxroots, it is the runtime, not the user, that decides where to these
-roots are placed in memory. This extra flexibility should allow for
-a more efficient implementaion.
+boxroots, it is our allocator, not the user, that decides where these
+roots are placed in memory. This extra flexibility allows for a more
+efficient implementation.
 
-We provide an implementation of this idea as a standalone library
-(`boxroot/` in this repository), using OCaml's GC scanning hooks. Due
-to limitations of the hook interface, there are aspects of the
-implementation that we cannot control as we would like (in particular,
-we cannot support incremental scanning of major-heap hooks), but our
-prototype performance is already promising.
+We provide an implementation of this idea as a standalone C library
+([boxroot/](boxroot/) in this repository), as a custom allocator using
+OCaml's GC scanning hooks. Our prototype already shows promising
+performance in benchmarks.
 
+In addition to better performance, movable roots fit a common use-case
+where Ocaml values are placed inside malloc'ed blocks and then
+registered as global roots, for instance for insertion in C library
+data structures. This pattern appears to be common. Our original
+motivation is to propose an idiomatic way of manipulating OCaml roots in
+Rust, analogous to `Box<T>` pointers.
 
-Note: our prototype library uses `aligned_alloc`, which might limit
-its portability on some systems. (On OSX we reimplement the missing
-`aligned_alloc` on top of `posix_memalign`, but some systems may lack
-`posix_memalign`.)
+## Design
+
+Functions to acquire, read, release and modify a `boxroot` are
+provided as follows.
+
+```c
+boxroot boxroot_create(value);
+value const * boxroot_get(boxroot);
+void boxroot_delete(boxroot);
+void boxroot_modify(boxroot *, value);
+```
+
+These functions operate in constant time. (This can be compared to the
+probabilistic logarithmic time offered by global roots.)
+
+See [boxroot/boxroot.h](boxroot/boxroot.h) for API documentation.
 
 ## Benchmarks
 
@@ -49,64 +65,115 @@ Currently we have implemented:
   using lists managed by the OCaml GC (no per-element root)
 - `choice_global_roots`: a global root per element
 - `choice_generational_roots`: a generational global root per element
-- `choice_boxroots`: like `choice_generational_roots`, but the root is
+- `choice_fake_boxroots`: like `choice_generational_roots`, but the root is
   movable (malloc'ed)
-- `choice_fast_boxroots`: the real thing — like `choice_boxroots`, but
+- `choice_boxroots`: the real thing — like `choice_boxroots`, but
   by rolling out our own allocator for movable roots, and implementing
   a fast scanning of the roots registered with caml_scan_roots_hook.
 
-#### Some numbers on my machine
+#### Some numbers on one of our machine
 
 ```
 $ make run
 ---
-ocaml-persistent: 1.96s
+ocaml-persistent: 2.89s
 count: 3628800
-minor collections: 1116
-major collections: 18
 ---
-ocaml-ephemeral: 1.88s
+ocaml-ephemeral: 2.75s
 count: 3628800
-minor collections: 865
-major collections: 18
 ---
-gc: 2.09s
+gc: 2.92s
 count: 3628800
-minor collections: 737
-major collections: 18
 ---
-global-roots: 12.05s
+boxroots: 2.80s
 count: 3628800
-minor collections: 526
-major collections: 16
 ---
-generational-global-roots: 4.35s
+global-roots: 14.38s
 count: 3628800
-minor collections: 526
-major collections: 16
 ---
-fake-boxroots: 4.29s
+generational-global-roots: 5.38s
 count: 3628800
-minor collections: 526
-major collections: 16
 ---
-boxroots: 2.04s
+fake-boxroots: 5.26s
 count: 3628800
-minor collections: 526
-major collections: 16
-work per minor: 7686
-work per major: 567779
-total allocated chunks: 8150 (31 MiB)
-peak allocated chunks: 8150 (31 MiB)
 ```
 
-We see that global roots add a large overhead (12s compared to 2s when
-using the OCaml GC), which is largely reduced by using generational
-global roots (4.3s).
+We see that global roots add a large overhead (14s compared to 2.8s
+when using the OCaml GC), which is largely reduced by using
+generational global roots (4.3s).
 
 "Fake" boxroots (generational roots made movable by placing them in
 their owned malloc'ed value) are exactly as fast as generational
 global roots.
 
-Real boxroots (implemented with a custom allocator) are competitive
-with implementations that do not use per-element roots.
+(Real) boxroots are competitive with implementations that do not use
+per-element roots (2.8s), and consistently faster than the reference C
+implementation that allocates lists with the GC.
+
+## Implementation
+
+We implemented a custom allocator that manages fairly standard
+freelist-based memory pools, but we arrange them so that we can scan
+these pools efficiently. In standard fashion, the pools are aligned in
+such a way that the most significant bits can be used to identify the
+pool from the address of their members. Since elements of the freelist
+are guaranteed to point only inside the memory pool, and non-immediate
+OCaml values are guaranteed to point only outside of the memory pool,
+we can identify allocated slots as follows:
+
+```c
+is_pool_member(slot, pool) ≝ (pool == (slot & ~(1<<N - 2)))
+```
+
+N is a parameter determining the size of the pools. The bitmask is
+chosen to preserve the least significant bit, so that immediate OCaml
+values (with lsb set) are correctly classified.
+
+Scanning is set up by registering a root scanning hook with the OCaml
+GC, and done by traversing the pools linearly. An early-exit
+optimisation when all roots have been found ensures that programs that
+use few roots throughout the life of the program only pay for what
+they use.
+
+The memory pools are managed in several rings, distinguished by their
+*class* and their *occupancy*. In addition to distinguishing the pools in
+use (which need to be scanned) from the pools that are free (and need
+not be scanned), the class distinguishes pools according to OCaml
+generations. A pool is *young* if and only if it is allowed to contain
+pointers to the minor heap. During minor collection, we only need to
+scan pools from the minor rings. At the end of the minor collection,
+the young pools, now guaranteed to no longer point to any young value,
+are promoted into *old* pools.
+
+In addition to distinguishing pools that are available for allocation
+from pools that are full, occupancy distinguishes the old pools that
+are quite more empty than others. By this we mean half-empty. Such
+pools are considered in priority for *demotion* into a young pool. (It
+is harmless to scan a major root during minor collection.) If no such
+pool is available for recycling into a young pool, we prefer to
+allocate a new pool.
+
+This heuristic of choosing pools at least half-empty guarantees that
+more than half of the scanning effort during minor collection is
+devoted to slots containing young values, or available for their
+allocation (if we disregard some optimisation in `boxroot_modify`).
+This amounts to trading efficiency guarantees of scanning against a
+slightly sub-optimal overall occupancy.
+
+## Limitations
+
+* Our prototype library uses `posix_memalign`, which currently limits
+  its portability on some systems.
+
+* No locking is performed yet, which makes it unsafe to use with
+  threads, including OCaml system threads unless care is taken not to
+  release boxroots without possessing the runtime lock. We intend to
+  lift this limitation in the future.
+
+* Due to limitations of the GC hook interface, no work has been done
+  to scan roots incrementally. Holding a large number of roots at the
+  same time can negatively affect latency.
+
+* Memory reclamation is not fully supported yet. Ideally, we would
+  like to release accumulated free pools, if any, during compaction,
+  which is when the OCaml GC itself releases its own resources.
