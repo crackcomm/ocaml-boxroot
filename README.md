@@ -76,39 +76,29 @@ Currently we have implemented:
 ```
 $ make run
 ---
-ocaml-persistent: 2.89s
+ocaml: 2.68s
 count: 3628800
 ---
-ocaml-ephemeral: 2.75s
+gc: 2.69s
 count: 3628800
 ---
-gc: 2.92s
+global: 40.84s
 count: 3628800
 ---
-boxroots: 2.80s
+generational: 6.93s
 count: 3628800
 ---
-global-roots: 14.38s
+boxroot: 2.88s
 count: 3628800
 ---
-generational-global-roots: 5.38s
-count: 3628800
----
-fake-boxroots: 5.26s
-count: 3628800
 ```
 
-We see that global roots add a large overhead (14s compared to 2.8s
-when using the OCaml GC), which is largely reduced by using
-generational global roots (4.3s).
+We see that global roots add a large overhead (40.9s compared to 2.7s when
+using the OCaml GC), which is largely reduced by using generational
+global roots (7.0s).
 
-"Fake" boxroots (generational roots made movable by placing them in
-their owned malloc'ed value) are exactly as fast as generational
-global roots.
-
-(Real) boxroots are competitive with implementations that do not use
-per-element roots (2.8s), and consistently faster than the reference C
-implementation that allocates lists with the GC.
+Boxroots (implemented with a custom allocator) are competitive (2.9s)
+with implementations that do not use per-element roots.
 
 ## Implementation
 
