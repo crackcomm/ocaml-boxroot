@@ -29,7 +29,8 @@ provided as follows.
 
 ```c
 boxroot boxroot_create(value);
-value const * boxroot_get(boxroot);
+value boxroot_get(boxroot);
+value const * boxroot_get_ref(boxroot);
 void boxroot_delete(boxroot);
 void boxroot_modify(boxroot *, value);
 ```
@@ -55,8 +56,9 @@ In our non-determinism monad, each list element goes through a "Ref"
 module that boxes its underlying value, and may be implemented
 (through C stubs) as an abstract block (not followed by the GC) whose
 value is registered as a GC root. By selecting different
-implementations of Ref, we can evaluate the performance of
-root-registration APIs.
+implementations of Ref, we can evaluate the overhead of root
+registration and scanning for various implementations, compared to a
+pure OCaml implementation.
 
 #### Implementations
 

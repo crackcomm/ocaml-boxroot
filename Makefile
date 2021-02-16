@@ -23,9 +23,9 @@ EMPTY=
 REF_IMPLS=\
   ocaml \
   gc \
+  boxroot \
   global \
   generational \
-  boxroot \
   $(EMPTY)
 
 run_bench = \
