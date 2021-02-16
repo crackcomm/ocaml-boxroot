@@ -8,7 +8,7 @@ typedef struct boxroot_private* boxroot;
 /* `boxroot_create(v)` allocates a new boxroot initialised to the
    value `v`. This value will be considered as a root by the OCaml GC
    as long as the boxroot lives or until it is modified. A return
-   value of `NULL` indicates an failure of allocation of the backing
+   value of `NULL` indicates a failure of allocation of the backing
    store. */
 boxroot boxroot_create(value);
 
