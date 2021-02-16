@@ -116,9 +116,9 @@ static_assert(POOL_SIZE / sizeof(slot) <= INT_MAX, "pool size too large");
 
 typedef struct pool {
   struct header hd;
-  /* Occupied slots are OCaml non-immediate values. Unoccupied slots
-     are a pointer to the next slot in the free list, or to the end of
-     the array denoting the end of the free list. */
+  /* Occupied slots are OCaml values. Unoccupied slots are a pointer
+     to the next slot in the free list, or to the end of the array,
+     denoting the last element of the free list. */
   slot roots[POOL_ROOTS_CAPACITY];
   uintptr_t end;// unused
 } pool;
