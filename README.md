@@ -51,25 +51,21 @@ permutations of the list [0; ..; n-1], using a non-determinism monad
 represented using (strict) lists. (This is an exponential way to
 compute factorial(n) with lots of allocations.)
 
-A reference implementation in OCaml is provided, but point is to
-implement the non-determinism monad list in C, with each element of
-the list registered as a root to the OCaml GC.
+In our non-determinism monad, each list element goes through a "Ref"
+module that boxes its underlying value, and may be implemented
+(through C stubs) as an abstract block (not followed by the GC) whose
+value is registered as a GC root. By selecting different
+implementations of Ref, we can evaluate the performance of
+root-registration APIs.
 
 #### Implementations
 
 Currently we have implemented:
-- `choice_ocaml_persistent`: a reference implementation in OCaml
-- `choice_ocaml_ephemeral`: like the previous, with update-in-place
-  for lists like the C implementations below
-- `choice_gc`: a reference implementation in C,
-  using lists managed by the OCaml GC (no per-element root)
-- `choice_global_roots`: a global root per element
-- `choice_generational_roots`: a generational global root per element
-- `choice_fake_boxroots`: like `choice_generational_roots`, but the root is
-  movable (malloc'ed)
-- `choice_boxroots`: the real thing — like `choice_boxroots`, but
-  by rolling out our own allocator for movable roots, and implementing
-  a fast scanning of the roots registered with caml_scan_roots_hook.
+- `ocaml`: a pure-OCaml implementation of Ref, using plain references
+- `gc`: a C implementation using `caml_alloc_small(1,0)` to implement references
+- `global`: an abstract block (allocated outside the OCaml heap) containing a global root
+- `generational`: an abstract block (outside the heap) containing a generational global root
+- `boxroot`: an abstract block (in the OCaml heap) containing a boxroot
 
 #### Some numbers on one of our machine
 
