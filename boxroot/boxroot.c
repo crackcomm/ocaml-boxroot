@@ -45,7 +45,7 @@
    + Visible effect for large pool sizes (independently of superblock
      size) with glibc malloc. Probably by avoiding the cost of memory
      reclamation. Note: this is fair: it is enough to reclaim memory
-     at Gc.compact like the OCaml Gc. Not observed with jemalloc.
+     at Gc.compact like the OCaml GC. Not observed with jemalloc.
    - Slower than aligned_alloc for small pool sizes (independently of
      superblock sizes?). Note: the current promotion/demotion
      heuristics work better with larger pools.
@@ -194,7 +194,7 @@ struct stats {
   int ring_operations; // Number of times hd.next is mutated
   long long is_young; // number of times is_young was called
   long long young_hit; // number of times a young value was encountered
-                 // during scanning
+                       // during scanning
   long long get_pool_header; // number of times get_pool_header was called
   long long is_pool_member; // number of times is_pool_member was called
   long long is_last_elem; // number of times is_last_elem was called
@@ -562,23 +562,32 @@ static slot * alloc_slot_slow(int);
 static inline slot * alloc_slot(int for_young_block)
 {
   pool *p = for_young_block ? pools.young_available : pools.old_available;
-  if (DEBUG) assert(p != NULL);
-  slot *new_root = p->hd.free_list;
-  if (LIKELY(!is_last_elem(new_root))) {
-    p->hd.free_list = (slot *)*new_root;
-    p->hd.alloc_count++;
-    return new_root;
+  if (LIKELY(p != NULL)) {
+    slot *new_root = p->hd.free_list;
+    if (LIKELY(!is_last_elem(new_root))) {
+      p->hd.free_list = (slot *)*new_root;
+      p->hd.alloc_count++;
+      return new_root;
+    }
   }
   return alloc_slot_slow(for_young_block);
 }
 
+static int setup;
+
 // Place an available pool in front of the ring and allocate from it.
 static slot * alloc_slot_slow(int for_young_block)
 {
+  // We might be here because boxroot is not setup.
+  if (!setup) {
+    fprintf(stderr, "boxroot is not setup\n");
+    return NULL;
+  }
   // TODO Latency: bound the number of young roots alloced at each
   // minor collection by scheduling a minor collection.
   pool **available_pools = for_young_block ?
     &pools.young_available : &pools.old_available;
+  assert(*available_pools != NULL);
   pool *full = ring_pop(available_pools);
   assert(pool_class_promote(full) == QUASI_FULL);
   assert(for_young_block == (YOUNG == full->hd.class));
@@ -930,7 +939,7 @@ int boxroot_setup()
   struct stats empty_stats = {0};
   stats = empty_stats;
   FOREACH_GLOBAL_RING(global, cl, { *global = NULL; });
-  if (!populate_pools(1) || !populate_pools(0)) return 0;
+  if (populate_pools(1) == NULL || populate_pools(0) == NULL) return 0;
   // save previous callbacks
   prev_scan_roots_hook = caml_scan_roots_hook;
   prev_minor_begin_hook = caml_minor_gc_begin_hook;
