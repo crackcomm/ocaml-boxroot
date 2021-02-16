@@ -18,7 +18,7 @@ ref boxroot_ref_create(value v) {
 }
 
 value boxroot_ref_get(ref r) {
-    return *boxroot_get(*Boxroot_val(r));
+    return boxroot_get(*Boxroot_val(r));
 }
 
 value boxroot_ref_delete(ref r) {
