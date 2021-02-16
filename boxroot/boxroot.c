@@ -263,10 +263,10 @@ static void free_chunk(void *p)
 
 /* {{{ Ring operations */
 
-static void ring_init(pool *p)
+static void ring_link(pool *p, pool *q)
 {
-  p->hd.next = p;
-  p->hd.prev = p;
+  p->hd.next = q;
+  q->hd.prev = p;
   ++stats.ring_operations;
 }
 
@@ -276,8 +276,7 @@ static void validate_pool(pool*);
 static void ring_concat(pool *source, pool **target)
 {
   if (source == NULL) return;
-  pool *old = *target;
-  if (old == NULL) {
+  if (*target == NULL) {
     *target = source;
     if (DEBUG) {
       FOREACH_GLOBAL_RING(global, class, {
@@ -285,14 +284,12 @@ static void ring_concat(pool *source, pool **target)
         });
     }
   } else {
-    assert(old->hd.class == source->hd.class);
-    pool *last = old->hd.prev;
-    last->hd.next = source;
-    source->hd.prev->hd.next = old;
-    old->hd.prev = source->hd.prev;
-    source->hd.prev = last;
+    assert((*target)->hd.class == source->hd.class);
+    pool *target_last = (*target)->hd.prev;
+    pool *source_last = source->hd.prev;
+    ring_link(target_last, source);
+    ring_link(source_last, *target);
     *target = source;
-    stats.ring_operations += 2;
   }
 }
 
@@ -302,15 +299,12 @@ static pool * ring_pop(pool **target)
   pool *front = *target;
   assert(front);
   if (front->hd.next == front) {
-    assert(front->hd.prev == front);
     *target = NULL;
     return front;
   }
-  front->hd.prev->hd.next = front->hd.next;
-  front->hd.next->hd.prev = front->hd.prev;
-  ++stats.ring_operations;
+  ring_link(front->hd.prev, front->hd.next);
   *target = front->hd.next;
-  ring_init(front);
+  ring_link(front, front);
   return front;
 }
 
@@ -326,7 +320,7 @@ static pool * get_uninitialised_pool()
   pool *chunk = alloc_chunk();
   if (chunk == NULL) return NULL;
   for (pool *p = chunk + POOLS_PER_CHUNK - 1; p >= chunk; p--) {
-    ring_init(p);
+    ring_link(p, p);
     p->hd.free_list = NULL;
     p->hd.alloc_count = 0;
     p->hd.class = UNTRACKED;
