@@ -33,9 +33,10 @@
 /* If the macro BOXROOT_STATS is defined, print statistics on teardown
    from OCaml?
    Recommended: 0. */
-#define PRINT_STATS 0
+#define PRINT_STATS 1
 /* Check integrity of pool structure after each scan, and print
    additional statistics? (slow)
+   This can also be enabled by defining the macro BOXROOT_DEBUG.
    Recommended: 0. */
 #define DEBUG 0
 /* Whether to pre-allocate several pools at once. Free pools are put
@@ -62,6 +63,11 @@
 #ifndef BOXROOT_STATS
 #undef PRINT_STATS
 #define PRINT_STATS 0
+#endif
+
+#ifdef BOXROOT_DEBUG
+#undef DEBUG
+#define DEBUG 1
 #endif
 
 #if PRINT_STATS != 0
