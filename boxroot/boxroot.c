@@ -116,7 +116,7 @@ static struct {
    heap. Scanned at the start of major collection. */
   /* Full or almost. Not considered for allocation. */
   pool *old_full;
-  /* Never NULL. */
+  /* Next considered for allocation. */
   pool *old_available;
   /* Pools with lots of available space, considered in priority for
      recycling into a young pool.*/
@@ -125,7 +125,7 @@ static struct {
 /* Pools of young values: contains roots pointing to the major or to
    the minor heap. Scanned at the start of minor and major
    collection. */
-  /* Never NULL. */
+  /* Next considered for allocation. */
   pool *young_available;
   /* Full or almost. Not considered for allocation. */
   pool *young_full;
@@ -424,10 +424,11 @@ static int try_free_chunks()
 
 /* {{{ Pool class management */
 
-// Find an available pool for the class; place it in front of the ring
-// of available pools and return it. Return NULL if none was found and
-// the allocation of a new one failed.
-static pool * populate_pools(int for_young)
+// Find an available pool for the class (young or old), ensure it is a
+// the start of the corresponding ring of available pools, and return
+// the pool. Return NULL if none was found and the allocation of a new
+// one failed.
+static pool * find_available_pool(int for_young)
 {
   pool **target = for_young ? &pools.young_available : &pools.old_available;
   if (*target != NULL && !is_last_elem((*target)->hd.free_list)) {
@@ -571,17 +572,6 @@ static void promote_young_pools()
     p->hd.class = (occ == EMPTY) ? UNTRACKED : OLD;
     pool_reclassify(p, occ);
   }
-  // Now ensure [pools.young_available != NULL]
-  pool *new_young_pool = populate_pools(1);
-  if (new_young_pool == NULL) {
-    // Memory allocation failed somehow. Since this is called during
-    // minor collection, we cannot fail here, so we put back the
-    // former head young pool. If this happens again inside a boxroot
-    // allocation, fail for real then.
-    pool_remove(former_young_pool);
-    former_young_pool->hd.class = YOUNG;
-    ring_concat(former_young_pool, &pools.young_available);
-  }
 }
 
 /* }}} */
@@ -627,12 +617,13 @@ static slot * alloc_slot_slow(int for_young_block)
   // minor collection by scheduling a minor collection.
   pool **available_pools = for_young_block ?
     &pools.young_available : &pools.old_available;
-  assert(*available_pools != NULL);
-  pool *full = ring_pop(available_pools);
-  assert(promotion_occupancy(full) == QUASI_FULL);
-  assert(for_young_block == (YOUNG == full->hd.class));
-  pool_reclassify(full, QUASI_FULL);
-  pool *p = populate_pools(for_young_block);
+  if (*available_pools != NULL) {
+    pool *full = ring_pop(available_pools);
+    assert(promotion_occupancy(full) == QUASI_FULL);
+    assert(for_young_block == (YOUNG == full->hd.class));
+    pool_reclassify(full, QUASI_FULL);
+  }
+  pool *p = find_available_pool(for_young_block);
   if (p == NULL) return NULL;
   assert(!is_last_elem(p->hd.free_list));
   assert(for_young_block == (p->hd.class == YOUNG));
@@ -981,7 +972,6 @@ int boxroot_setup()
   struct stats empty_stats = {0};
   stats = empty_stats;
   FOREACH_GLOBAL_RING(global, cl, { *global = NULL; });
-  if (populate_pools(1) == NULL || populate_pools(0) == NULL) return 0;
   // save previous callbacks
   prev_scan_roots_hook = caml_scan_roots_hook;
   prev_minor_begin_hook = caml_minor_gc_begin_hook;
@@ -998,6 +988,7 @@ int boxroot_setup()
 void boxroot_teardown()
 {
   if (!setup) return;
+  // restore callbacks
   caml_scan_roots_hook = prev_scan_roots_hook;
   caml_minor_gc_begin_hook = prev_minor_begin_hook;
   caml_minor_gc_end_hook = prev_minor_end_hook;
