@@ -453,28 +453,32 @@ static pool * populate_pools(int for_young)
   return new_pool;
 }
 
-/* Interrupt deallocation every THRESHOLD_SIZE. */
-#define THRESHOLD_SIZE_LOG 4 // 16
-#define THRESHOLD_SIZE ((int)1 << THRESHOLD_SIZE_LOG)
-#define NUM_THRESHOLD (POOL_SIZE / (THRESHOLD_SIZE * sizeof(slot)))
+/* Take the slow path on deallocation every DEALLOC_THRESHOLD_SIZE
+   deallocations. */
+#define DEALLOC_THRESHOLD_SIZE_LOG 4 // 16
+#define DEALLOC_THRESHOLD_SIZE ((int)1 << DEALLOC_THRESHOLD_SIZE_LOG)
+/* The pool is divided in NUM_DEALLOC_THRESHOLD parts of equal size
+   DEALLOC_THRESHOLD_SIZE. */
+#define NUM_DEALLOC_THRESHOLD (POOL_SIZE / (DEALLOC_THRESHOLD_SIZE * sizeof(slot)))
 /* Old pools become candidate for young allocation below
-   LOW_COUNT_THRESHOLD / NUM_THRESHOLD occupancy. This tries to guarantee that
-   minor scanning hits a good proportion of young values. */
-#define LOW_COUNT_THRESHOLD (NUM_THRESHOLD / 2)
-/* Pools become candidate for allocation below
-   HIGH_COUNT_THRESHOLD / NUM_THRESHOLD occupancy. */
-#define HIGH_COUNT_THRESHOLD (NUM_THRESHOLD - 1)
+   LOW_COUNT_THRESHOLD / NUM_DEALLOC_THRESHOLD occupancy. This tries
+   to guarantee that minor scanning hits a good proportion of young
+   values. */
+#define LOW_COUNT_THRESHOLD (NUM_DEALLOC_THRESHOLD / 2)
+/* Pools become candidate for allocation below HIGH_COUNT_THRESHOLD /
+   NUM_DEALLOC_THRESHOLD occupancy. */
+#define HIGH_COUNT_THRESHOLD (NUM_DEALLOC_THRESHOLD - 1)
 
 static_assert(0 < LOW_COUNT_THRESHOLD, "");
 static_assert(LOW_COUNT_THRESHOLD < HIGH_COUNT_THRESHOLD, "");
-static_assert(HIGH_COUNT_THRESHOLD < NUM_THRESHOLD, "");
-static_assert(1 + HIGH_COUNT_THRESHOLD * THRESHOLD_SIZE < POOL_ROOTS_CAPACITY,
-              "HIGH_COUNT_THRESHOLD too high");
+static_assert(HIGH_COUNT_THRESHOLD < NUM_DEALLOC_THRESHOLD, "");
+static_assert(1 + HIGH_COUNT_THRESHOLD * DEALLOC_THRESHOLD_SIZE
+              < POOL_ROOTS_CAPACITY, "HIGH_COUNT_THRESHOLD too high");
 
 // hot path
 static inline int is_alloc_threshold(int alloc_count)
 {
-  return (alloc_count & (THRESHOLD_SIZE - 1)) == 0;
+  return (alloc_count & (DEALLOC_THRESHOLD_SIZE - 1)) == 0;
 }
 
 typedef enum occupancy {
@@ -487,7 +491,7 @@ typedef enum occupancy {
 
 static int get_threshold(int alloc_count)
 {
-  return 1 + (alloc_count - 1) / THRESHOLD_SIZE;
+  return 1 + (alloc_count - 1) / DEALLOC_THRESHOLD_SIZE;
 }
 
 static occupancy promotion_occupancy(pool *p)
