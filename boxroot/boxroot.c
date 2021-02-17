@@ -178,7 +178,7 @@ struct stats {
                        // during scanning
   long long get_pool_header; // number of times get_pool_header was called
   long long is_pool_member; // number of times is_pool_member was called
-  long long is_last_elem; // number of times is_last_elem was called
+  long long is_end_of_roots; // number of times is_end_of_roots was called
 };
 
 static struct stats stats;
@@ -204,9 +204,9 @@ static inline int is_pool_member(slot v, pool *p)
 }
 
 // hot path
-static inline int is_last_elem(slot *v)
+static inline int is_end_of_roots(slot *v)
 {
-  if (DEBUG) ++stats.is_last_elem;
+  if (DEBUG) ++stats.is_end_of_roots;
   return ((uintptr_t)(v + 1) & (POOL_SIZE - 1)) == 0;
 }
 
@@ -431,7 +431,7 @@ static int try_free_chunks()
 static pool * find_available_pool(int for_young)
 {
   pool **target = for_young ? &pools.young_available : &pools.old_available;
-  if (*target != NULL && !is_last_elem((*target)->hd.free_list)) {
+  if (*target != NULL && !is_end_of_roots((*target)->hd.free_list)) {
     return *target;
   }
   pool *new_pool = NULL;
@@ -594,7 +594,7 @@ static inline slot * alloc_slot(int for_young_block)
   pool *p = for_young_block ? pools.young_available : pools.old_available;
   if (LIKELY(p != NULL)) {
     slot *new_root = p->hd.free_list;
-    if (LIKELY(!is_last_elem(new_root))) {
+    if (LIKELY(!is_end_of_roots(new_root))) {
       p->hd.free_list = (slot *)*new_root;
       p->hd.alloc_count++;
       return new_root;
@@ -625,7 +625,7 @@ static slot * alloc_slot_slow(int for_young_block)
   }
   pool *p = find_available_pool(for_young_block);
   if (p == NULL) return NULL;
-  assert(!is_last_elem(p->hd.free_list));
+  assert(!is_end_of_roots(p->hd.free_list));
   assert(for_young_block == (p->hd.class == YOUNG));
   return alloc_slot(for_young_block);
 }
@@ -913,12 +913,12 @@ void boxroot_print_stats()
          "young hits: %d%%\n"
          "get_pool_header: %'lld\n"
          "is_pool_member: %'lld\n"
-         "is_last_elem: %'lld\n",
+         "is_end_of_roots: %'lld\n",
          stats.is_young,
          (int)((stats.young_hit * 100) / stats.total_scanning_work_minor),
          stats.get_pool_header,
          stats.is_pool_member,
-         stats.is_last_elem);
+         stats.is_end_of_roots);
 #endif
 }
 
