@@ -21,7 +21,6 @@
 #include <caml/minor_gc.h>
 #include <caml/major_gc.h>
 #include <caml/compact.h>
-#include <caml/fail.h>
 
 /* }}} */
 
@@ -30,10 +29,6 @@
 /* Log of the size of the pools (12 = 4KB, an OS page).
    Recommended: 14. */
 #define POOL_LOG_SIZE 14
-/* If the macro BOXROOT_STATS is defined, print statistics on teardown
-   from OCaml?
-   Recommended: 0. */
-#define PRINT_STATS 1
 /* Size of a chunk. Several pools are allocated at once (set to
    POOL_LOG_SIZE to disable). Free pools are put aside and re-used
    instead of being immediately freed. A bigger chunk size has visible
@@ -51,18 +46,9 @@
 
 /* {{{ Setup */
 
-#ifndef BOXROOT_STATS
-#undef PRINT_STATS
-#define PRINT_STATS 0
-#endif
-
 #ifdef BOXROOT_DEBUG
 #undef DEBUG
 #define DEBUG 1
-#endif
-
-#if PRINT_STATS != 0
-#include <locale.h>
 #endif
 
 static_assert(CHUNK_LOG_SIZE >= POOL_LOG_SIZE,
@@ -996,12 +982,6 @@ int boxroot_setup()
   return 1;
 }
 
-value boxroot_scan_hook_setup(value unit)
-{
-  if (!boxroot_setup()) caml_failwith("boxroot_scan_hook_setup");
-  return unit;
-}
-
 void boxroot_teardown()
 {
   if (!setup) return;
@@ -1010,16 +990,6 @@ void boxroot_teardown()
   caml_minor_gc_end_hook = prev_minor_end_hook;
   free_all_chunks();
   setup = 0;
-}
-
-value boxroot_scan_hook_teardown(value unit)
-{
-#if PRINT_STATS != 0
-  setlocale(LC_ALL, "en_US.UTF-8");
-  boxroot_print_stats();
-#endif
-  boxroot_teardown();
-  return unit;
 }
 
 /* }}} */
