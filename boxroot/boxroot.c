@@ -477,20 +477,20 @@ static inline int is_alloc_threshold(int alloc_count)
   return (alloc_count & (THRESHOLD_SIZE - 1)) == 0;
 }
 
-typedef enum pool_class {
+typedef enum occupancy {
   EMPTY,
   LOW,
   HIGH,
   QUASI_FULL,
   NO_CHANGE
-} pool_class;
+} occupancy;
 
 static int get_threshold(int alloc_count)
 {
   return 1 + (alloc_count - 1) / THRESHOLD_SIZE;
 }
 
-static pool_class pool_class_promote(pool *p)
+static occupancy promotion_occupancy(pool *p)
 {
   int threshold = get_threshold(p->hd.alloc_count);
   if (threshold == 0) return EMPTY;
@@ -499,7 +499,7 @@ static pool_class pool_class_promote(pool *p)
   return QUASI_FULL;
 }
 
-static pool_class pool_class_demote(pool *p)
+static occupancy demotion_occupancy(pool *p)
 {
   assert(is_alloc_threshold(p->hd.alloc_count));
   int threshold = get_threshold(p->hd.alloc_count);
@@ -509,15 +509,15 @@ static pool_class pool_class_demote(pool *p)
   return NO_CHANGE;
 }
 
-static void pool_reclassify(pool *p, pool_class new_pool_class)
+static void pool_reclassify(pool *p, occupancy occ)
 {
-  assert(new_pool_class != NO_CHANGE);
+  assert(occ != NO_CHANGE);
   assert(p->hd.next == p);
-  class value_class = p->hd.class;
-  assert((value_class == UNTRACKED) == (new_pool_class == EMPTY));
-  int is_young = value_class == YOUNG;
+  class cl = p->hd.class;
+  assert((cl == UNTRACKED) == (occ == EMPTY));
+  int is_young = cl == YOUNG;
   pool **target = NULL;
-  switch (new_pool_class) {
+  switch (occ) {
   case EMPTY:
     assert(p->hd.alloc_count == 0);
     target = &pools.free;
@@ -540,8 +540,8 @@ static void pool_reclassify(pool *p, pool_class new_pool_class)
 
 static void try_demote_pool(pool *p)
 {
-  pool_class pool_class = pool_class_demote(p);
-  if (pool_class == NO_CHANGE) return;
+  occupancy occ = demotion_occupancy(p);
+  if (occ == NO_CHANGE) return;
   if (p == p->hd.next &&
       (p == pools.young_available || p == pools.old_available)) {
     // Ignore the pool currently used for allocation if it is the last
@@ -549,8 +549,8 @@ static void try_demote_pool(pool *p)
     return;
   }
   pool_remove(p);
-  if (pool_class == EMPTY) p->hd.class = UNTRACKED;
-  pool_reclassify(p, pool_class);
+  if (occ == EMPTY) p->hd.class = UNTRACKED;
+  pool_reclassify(p, occ);
 }
 
 static void promote_young_pools()
@@ -560,12 +560,12 @@ static void promote_young_pools()
   pools.young_full = NULL;
   while (pools.young_available != NULL) {
     pool *p = ring_pop(&pools.young_available);
-    pool_class pool_class = pool_class_promote(p);
-    assert(pool_class != NO_CHANGE);
+    occupancy occ = promotion_occupancy(p);
+    assert(occ != NO_CHANGE);
     // A young pool can be empty if it has not been allocated
     // into yet, or if it is the last available young pool.
-    p->hd.class = (pool_class == EMPTY) ? UNTRACKED : OLD;
-    pool_reclassify(p, pool_class);
+    p->hd.class = (occ == EMPTY) ? UNTRACKED : OLD;
+    pool_reclassify(p, occ);
   }
   // Now ensure [pools.young_available != NULL]
   pool *new_young_pool = populate_pools(1);
@@ -625,7 +625,7 @@ static slot * alloc_slot_slow(int for_young_block)
     &pools.young_available : &pools.old_available;
   assert(*available_pools != NULL);
   pool *full = ring_pop(available_pools);
-  assert(pool_class_promote(full) == QUASI_FULL);
+  assert(promotion_occupancy(full) == QUASI_FULL);
   assert(for_young_block == (YOUNG == full->hd.class));
   pool_reclassify(full, QUASI_FULL);
   pool *p = populate_pools(for_young_block);
