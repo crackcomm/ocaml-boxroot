@@ -2,7 +2,9 @@
 #include <caml/mlvalues.h>
 #include <caml/memory.h>
 #include <caml/alloc.h>
+#include <caml/fail.h>
 #include <assert.h>
+#include <locale.h>
 
 #include "../../boxroot/boxroot.h"
 
@@ -31,13 +33,18 @@ value boxroot_ref_modify(ref r, value v) {
     return Val_unit;
 }
 
-value boxroot_ref_setup(value unit) {
-    int ret = boxroot_setup();
-    assert(ret == 1);
-    return Val_unit;
+value boxroot_ref_setup(value unit)
+{
+  if (!boxroot_setup()) caml_failwith("boxroot_scan_hook_setup");
+  return unit;
 }
 
-value boxroot_ref_teardown(value unit) {
-    boxroot_teardown();
-    return Val_unit;
+value boxroot_ref_teardown(value unit)
+{
+#ifdef BOXROOT_STATS
+  setlocale(LC_ALL, "en_US.UTF-8");
+  boxroot_print_stats();
+#endif
+  boxroot_teardown();
+  return unit;
 }

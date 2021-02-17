@@ -27,16 +27,16 @@ value const * boxroot_get_ref(boxroot);
 void boxroot_delete(boxroot);
 
 /* `boxroot_modify(&r,v)` changes the value kept alive by the boxroot
-   `r` to `v`. It is equivalent to the following, albeit more
-   efficient:
+   `r` to `v`. It is equivalent to the following:
    ```
    boxroot_delete(r);
    r = boxroot_create(v);
    ```
-   In particular, the root can be reallocated. The value of `r` must
-   therefore be checked afterwards, since a value of `NULL` will
-   denote an allocation failure. This reallocation, if needed, occurs
-   at most once between two minor collections. */
+   In particular, the root can be reallocated. However, unlike
+   `boxroot_create`, `boxroot_modify` never fails, so `r` is
+   guaranteed to be non-NULL afterwards. In addition, `boxroot_modify`
+   is more efficient. Indeed, the reallocation, if needed, occurs at
+   most once between two minor collections. */
 void boxroot_modify(boxroot *, value);
 
 
