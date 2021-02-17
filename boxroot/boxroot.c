@@ -693,14 +693,23 @@ void boxroot_modify(boxroot *root, value new_value)
   if (DEBUG) ++stats.total_modify;
   int is_new_young_block = is_young_block(new_value);
   pool *p;
-  if (!is_new_young_block || (p = get_pool_header(s))->hd.class == YOUNG) {
+  if (LIKELY(!is_new_young_block
+             || (p = get_pool_header(s))->hd.class == YOUNG)) {
     *(value *)s = new_value;
     return;
   }
-  free_slot(s, p);
-  *root = root_create_classified(new_value, is_new_young_block);
-  // Note: *root can become NULL, which must be checked explicitly
-  // (in Rust, check and panic here).
+  // We need to reallocate, but this reallocation happens at most once
+  // between two minor collections.
+  boxroot new = root_create_classified(new_value, is_new_young_block);
+  if (LIKELY(new != NULL)) {
+    free_slot(s, p);
+    *root = new;
+  } else {
+    // Better not fail here
+    pool_remove(p);
+    p->hd.class = YOUNG;
+    ring_concat(p, &pools.young_available);
+  }
 }
 
 /* }}} */
