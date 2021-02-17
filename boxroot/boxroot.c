@@ -509,7 +509,7 @@ static occupancy demotion_occupancy(pool *p)
   assert(is_alloc_threshold(p->hd.alloc_count));
   int threshold = get_threshold(p->hd.alloc_count);
   if (threshold == 0) return EMPTY;
-  if (threshold == LOW_COUNT_THRESHOLD) return LOW;
+  if (threshold == LOW_COUNT_THRESHOLD && p->hd.class == OLD) return LOW;
   if (threshold == HIGH_COUNT_THRESHOLD) return HIGH;
   return NO_CHANGE;
 }
