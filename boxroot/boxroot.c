@@ -88,9 +88,10 @@ static_assert(POOL_SIZE / sizeof(slot) <= INT_MAX, "pool size too large");
   ((int)((POOL_SIZE - sizeof(struct header)) / sizeof(slot) - 1))
 /* &pool->roots[POOL_ROOTS_CAPACITY] can end up as a placeholder value
    in the freelist to denote the last element of the freelist,
-   starting from after releasing from a full pool for the first
-   time. To ensure that this value is recognised by the test
-   [is_pool_member(v, pool)], we subtract one from the capacity. */
+   starting from after releasing from a full pool for the first time.
+   To ensure that this value is recognised by the test
+   [is_pool_member(v, pool)], we ensure the roots array end before the
+   pool ends. */
 
 typedef struct pool {
   struct header hd;
@@ -98,9 +99,10 @@ typedef struct pool {
      to the next slot in the free list, or to the end of the array,
      denoting the last element of the free list. */
   slot roots[POOL_ROOTS_CAPACITY];
-  /* The last element is reserved, as explained above. We re-use it to
-     store a list of all allocated chunks. It is either NULL, or
-     points to a pool first in its chunk. */
+  /* As explained above, we need a gap of at least one before the next
+     pool in the chunk. We use it to store a list of all allocated
+     chunks. It is NULL unless this is the first pool in its chunk. In
+     the latter case, it points to the next allocated chunk. */
   struct pool *next_chunk;
 } pool;
 
