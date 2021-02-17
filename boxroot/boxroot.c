@@ -631,7 +631,7 @@ static slot * alloc_slot_slow(int for_young_block)
 }
 
 // hot path
-// assumes [is_pool_member(root, p)]
+// assumes [is_pool_member(s, p)]
 static inline void free_slot(slot *s, pool *p)
 {
   *s = (slot)p->hd.free_list;
