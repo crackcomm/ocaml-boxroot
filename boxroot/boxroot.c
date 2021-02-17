@@ -682,6 +682,20 @@ void boxroot_delete(boxroot root)
   free_slot(s, get_pool_header(s));
 }
 
+static void boxroot_reallocate(boxroot *root, pool *p, value new_value)
+{
+  boxroot new = root_create_classified(new_value, 1);
+  if (LIKELY(new != NULL)) {
+    free_slot((slot *)*root, p);
+    *root = new;
+  } else {
+    // Better not fail in boxroot_modify. Expensive but fail-safe:
+    pool_remove(p);
+    p->hd.class = YOUNG;
+    ring_concat(p, &pools.young_available);
+  }
+}
+
 // hot path
 void boxroot_modify(boxroot *root, value new_value)
 {
@@ -697,16 +711,7 @@ void boxroot_modify(boxroot *root, value new_value)
   }
   // We need to reallocate, but this reallocation happens at most once
   // between two minor collections.
-  boxroot new = root_create_classified(new_value, is_new_young_block);
-  if (LIKELY(new != NULL)) {
-    free_slot(s, p);
-    *root = new;
-  } else {
-    // Better not fail here
-    pool_remove(p);
-    p->hd.class = YOUNG;
-    ring_concat(p, &pools.young_available);
-  }
+  boxroot_reallocate(root, p, new_value);
 }
 
 /* }}} */
