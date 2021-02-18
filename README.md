@@ -93,11 +93,14 @@ according to probabilities determined by parameters.
   allocated in the current minor heap,
 * `LARGE_ROOT_PROMOTION_RATE=1`: the survival rate for large roots
   allocated in the current minor heap,
-* `ROOT_SURVIVAL_RATE=0.9`: the survival rate for roots that survived
+* `ROOT_SURVIVAL_RATE=0.99`: the survival rate for roots that survived
   a first minor collection,
 * `GC_PROMOTION_RATE=0.1`: promotion rate of GC-tracked values,
 * `GC_SURVIVAL_RATE=0.5`: survival rate of GC-tracked values.
 
+These settings favour the creation of a lot of roots, most of which
+are short-lived. Roots that survive are few, but they are very
+long-lived.
 
 ### Some numbers on one of our machine
 
@@ -105,39 +108,46 @@ according to probabilities determined by parameters.
 $ make run
 Benchmark: perm_count
 ---
-ocaml: 4.33s
+ocaml: 4.00s
 count: 3628800
 ---
-gc: 4.33s
+gc: 4.07s
 count: 3628800
 ---
-boxroot: 4.33s
+boxroot: 4.02s
 count: 3628800
 ---
-global: 44.52s
+global: 43.35s
 count: 3628800
 ---
-generational: 9.93s
+generational: 9.31s
 count: 3628800
 ---
 Benchmark: synthetic
 ---
-ocaml: 10.57s
+ocaml: 19.24s
 ---
-gc: 10.64s
+gc: 17.65s
 ---
-boxroot: 10.70s
+boxroot: 15.88s
 ---
-global: 21.05s
+global: 39.50s
 ---
-generational: 20.13s
+generational: 25.10s
 ---
 ```
 
-We see that global roots add a large overhead, which is largely
-reduced by using generational global roots in the first benchmark.
-Whereas boxroots are competitive with reference implementations that
-do not use roots.
+We see that global roots add a large overhead, which is reduced by
+using generational global roots. Boxroots outperform generational
+global roots, and are competitive with the reference implementations
+that do not use roots (ocaml and gc).
+
+Since the boxroot is directly inside a gc-allocated value, our
+benchmarks leave few opportunities for the version using boxroots
+outperforming the versions without roots. The repeatable
+outperformance of non-roots versions by the boxroot version in the
+second case could be explained by the greater cache locality of
+pointers to the heap during scanning.
 
 ## Implementation
 
@@ -202,7 +212,3 @@ scanning against a slightly sub-optimal overall occupancy.
 * Due to limitations of the GC hook interface, no work has been done
   to scan roots incrementally. Holding a large number of roots at the
   same time can negatively affect latency.
-
-* Memory reclamation is not fully supported yet. Ideally, we would
-  like to release accumulated free pools, if any, during compaction,
-  which is when the OCaml GC itself releases its own resources.

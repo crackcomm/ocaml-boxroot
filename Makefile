@@ -51,7 +51,7 @@ run-synthetic: $(BENCHMARKS)
 	    LARGE_ROOTS=20 \
 	    SMALL_ROOT_PROMOTION_RATE=0.2 \
 	    LARGE_ROOT_PROMOTION_RATE=1 \
-	    ROOT_SURVIVAL_RATE=0.9 \
+	    ROOT_SURVIVAL_RATE=0.99 \
 	    GC_PROMOTION_RATE=0.1 \
 	    GC_SURVIVAL_RATE=0.5 \
 	    ./benchmarks/synthetic.exe \
