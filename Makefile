@@ -58,7 +58,9 @@ run-synthetic: $(BENCHMARKS)
 	)
 
 .PHONY: run
-run: run-perm_count run-synthetic
+run:
+	$(MAKE) run-perm_count
+	$(MAKE) run-synthetic
 
 .PHONY: test-boxroot
 test-boxroot: benchmarks/perm_count.exe
