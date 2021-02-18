@@ -3,6 +3,7 @@
 BENCHMARKS = $(addprefix benchmarks/,\
   perm_count.exe \
   synthetic.exe \
+  globroots.exe \
 )
 
 .PHONY: entry
@@ -51,6 +52,8 @@ run: $(BENCHMARKS)
 	    GC_SURVIVAL_RATE=0.5 \
 	    ./benchmarks/synthetic.exe \
 	)
+	$(call run_bench,"globroots", \
+	  CHOICE=persistent N=500_000 ./benchmarks/globroots.exe)
 
 
 .PHONY: test-boxroot
