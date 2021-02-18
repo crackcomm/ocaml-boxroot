@@ -75,29 +75,27 @@ Currently we have implemented:
 ```
 $ make run
 ---
-ocaml: 2.68s
+ocaml: 4.28s
 count: 3628800
 ---
-gc: 2.69s
+gc: 4.29s
 count: 3628800
 ---
-global: 40.84s
+boxroot: 4.29s
 count: 3628800
 ---
-generational: 6.93s
+global: 45.01s
 count: 3628800
 ---
-boxroot: 2.88s
+generational: 10.04s
 count: 3628800
 ---
 ```
 
-We see that global roots add a large overhead (40.9s compared to 2.7s when
-using the OCaml GC), which is largely reduced by using generational
-global roots (7.0s).
-
-Boxroots (implemented with a custom allocator) are competitive (2.9s)
-with implementations that do not use per-element roots.
+We see that global roots add a large overhead (45s compared to 4.3s
+when using the OCaml GC), which is largely reduced by using
+generational global roots (10s). Whereas boxroots are competitive
+(4.3s) with implementations that do not use per-element roots.
 
 ## Implementation
 
