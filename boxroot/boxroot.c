@@ -310,6 +310,8 @@ static pool * get_uninitialised_pool()
   pool *chunk = alloc_chunk();
   if (chunk == NULL) return NULL;
   pool *end = chunk + POOLS_PER_CHUNK;
+  // Add the pools in order so that the first pools in the chunk are
+  // allocated first.
   for (pool *p = chunk; p < end; p++) {
     ring_link(p, p);
     p->hd.free_list = NULL;
