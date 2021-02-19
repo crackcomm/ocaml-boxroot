@@ -554,10 +554,9 @@ static void try_demote_pool(pool *p)
 {
   occupancy occ = demotion_occupancy(p);
   if (occ == NO_CHANGE) return;
-  if (p == p->hd.next &&
+  if (occ != EMPTY &&
       (p == pools.young_available || p == pools.old_available)) {
-    // Ignore the pool currently used for allocation if it is the last
-    // one standing.
+    // Ignore the pool currently used for allocation unless it is empty.
     return;
   }
   pool_remove(p);
