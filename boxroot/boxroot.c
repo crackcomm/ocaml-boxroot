@@ -365,16 +365,19 @@ static void free_all_chunks()
 }
 
 /* Mark pools in a chunk if all are untracked. */
-static void mark_free_chunk(pool *chunk)
+static int mark_free_chunk(pool *chunk)
 {
   pool *end = chunk + POOLS_PER_CHUNK;
+  // The initialized chunks come first, so that we exit early if some
+  // pool is not UNTRACKED.
   for (pool *p = chunk; p != end; p++) {
-    if (p->hd.class != UNTRACKED) return;
+    if (p->hd.class != UNTRACKED) return 0;
   }
   // All the pools are untracked, we can mark the pools in this chunk.
   for (pool *p = chunk; p != end; p++) {
     p->hd.class = MARKED_FOR_DEALLOCATION;
   }
+  return 1;
 }
 
 /* Free all chunks whose pools are all untracked; non-destructive.
@@ -382,9 +385,11 @@ static void mark_free_chunk(pool *chunk)
 static int try_free_chunks()
 {
   // Mark free chunks
+  int marked = 0;
   for (pool *chunk = last_chunk; chunk != NULL; chunk = chunk->next_chunk) {
-    mark_free_chunk(chunk);
+    marked += mark_free_chunk(chunk);
   }
+  if (!marked) return 0;
   // Sweep global rings
   FOREACH_GLOBAL_RING(global, cl, {
       if (cl != UNTRACKED) continue;
@@ -397,7 +402,7 @@ static int try_free_chunks()
           if (global == &pools.free) --stats.live_pools;
         } else {
           if (last == NULL) start = p;
-          else ring_link(last, p);
+          else if (p->hd.prev != last) ring_link(last, p);
           last = p;
         }
         p = p->hd.next;
