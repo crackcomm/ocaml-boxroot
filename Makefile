@@ -9,6 +9,8 @@ BENCHMARKS = $(addprefix benchmarks/,\
 entry:
 	@echo "make all: build all benchmarks"
 	@echo "make run: run all benchmarks"
+	@echo "make run-perm_count: run perm_count benchmark"
+	@echo "make run-synthetic: run synthetic benchmark"
 	@echo "make test-boxroot: test boxroot on perm_count"
 	@echo "make clean"
 
@@ -35,23 +37,30 @@ run_bench = \
     && (REF=$(REF) $(2); echo "---") \
   )
 
-.PHONY: run
-run: $(BENCHMARKS)
+.PHONY: run-perm_count
+run-perm_count: $(BENCHMARKS)
 	$(call run_bench,"perm_count", \
 	  CHOICE=persistent N=10 ./benchmarks/perm_count.exe)
+
+.PHONY: run-synthetic
+run-synthetic: $(BENCHMARKS)
 	$(call run_bench,"synthetic", \
 	    N=8 \
 	    CHOICE=ephemeral \
 	    SMALL_ROOTS=10_000 \
-	    LARGE_ROOTS=0 \
-	    SMALL_ROOT_PROMOTION_RATE=0 \
-	    LARGE_ROOT_PROMOTION_RATE=0 \
-	    ROOT_SURVIVAL_RATE=0.5 \
+	    LARGE_ROOTS=20 \
+	    SMALL_ROOT_PROMOTION_RATE=0.2 \
+	    LARGE_ROOT_PROMOTION_RATE=1 \
+	    ROOT_SURVIVAL_RATE=0.99 \
 	    GC_PROMOTION_RATE=0.1 \
 	    GC_SURVIVAL_RATE=0.5 \
 	    ./benchmarks/synthetic.exe \
 	)
 
+.PHONY: run
+run:
+	$(MAKE) run-perm_count
+	$(MAKE) run-synthetic
 
 .PHONY: test-boxroot
 test-boxroot: benchmarks/perm_count.exe

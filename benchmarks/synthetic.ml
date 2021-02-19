@@ -16,6 +16,7 @@ GC_SURVIVAL_RATE=0.5 \
 
 let wrong_usage () =
   Printf.eprintf "Expected environment variables:
+   N: log_2 of the number of minor generations
    SMALL_ROOTS: the number of small roots allocated (in the minor heap) per minor collection
    LARGE_ROOTS: the number of large roots allocated (in the major heap) per minor collection
    SMALL_ROOT_PROMOTION_RATE: the survival rate for small roots allocated in the current minor heap

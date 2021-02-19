@@ -46,6 +46,25 @@ See [boxroot/boxroot.h](boxroot/boxroot.h) for API documentation.
 To evaluate our experiment, we run various allocation-heavy
 benchmarks.
 
+### Implementations
+
+The benchmarks compares various implementation of an OCaml reference
+type Ref containing a single value with an imperative interface
+(`create`, `get`, `delete`, `modify`):
+
+- `ocaml`: a pure-OCaml implementation using plain references,
+- `gc`: a C implementation using `caml_alloc_small(1,0)`,
+- `boxroot`: an abstract block (in the OCaml heap) containing a
+  `boxroot`,
+- `global`: an abstract block (allocated outside the OCaml heap)
+  containing a global root, and
+- `generational`: an abstract block (outside the heap) containing a
+  generational global root.
+
+By selecting different implementations of Ref, we can evaluate the
+overhead of root registration and scanning for various
+implementations, compared to a pure OCaml implementation.
+
 ### Permutations of a list
 
 The small program used in this benchmark computes the set of all
@@ -53,49 +72,82 @@ permutations of the list [0; ..; n-1], using a non-determinism monad
 represented using (strict) lists. (This is an exponential way to
 compute factorial(n) with lots of allocations.)
 
-In our non-determinism monad, each list element goes through a "Ref"
+In our non-determinism monad, each list element goes through the Ref
 module that boxes its underlying value, and may be implemented
 (through C stubs) as an abstract block (not followed by the GC) whose
-value is registered as a GC root. By selecting different
-implementations of Ref, we can evaluate the overhead of root
-registration and scanning for various implementations, compared to a
-pure OCaml implementation.
+value is registered as a GC root.
 
-#### Implementations
+This benchmark creates a lot of roots alive at the same time.
 
-Currently we have implemented:
-- `ocaml`: a pure-OCaml implementation of Ref, using plain references
-- `gc`: a C implementation using `caml_alloc_small(1,0)` to implement references
-- `global`: an abstract block (allocated outside the OCaml heap) containing a global root
-- `generational`: an abstract block (outside the heap) containing a generational global root
-- `boxroot`: an abstract block (in the OCaml heap) containing a boxroot
+### Synthetic benchmark
 
-#### Some numbers on one of our machine
+In this benchmark, we allocate and deallocate values and roots
+according to probabilities determined by parameters.
+
+* `N=8`: log_2 of the number of minor generations
+* `SMALL_ROOTS=10_000`: the number of small roots allocated (in the
+  minor heap) per minor collection,
+* `LARGE_ROOTS=20`: the number of large roots allocated (in the major
+  heap) per minor collection,
+* `SMALL_ROOT_PROMOTION_RATE=0.2`: the survival rate for small roots
+  allocated in the current minor heap,
+* `LARGE_ROOT_PROMOTION_RATE=1`: the survival rate for large roots
+  allocated in the current minor heap,
+* `ROOT_SURVIVAL_RATE=0.99`: the survival rate for roots that survived
+  a first minor collection,
+* `GC_PROMOTION_RATE=0.1`: promotion rate of GC-tracked values,
+* `GC_SURVIVAL_RATE=0.5`: survival rate of GC-tracked values.
+
+These settings favour the creation of a lot of roots, most of which
+are short-lived. Roots that survive are few, but they are very
+long-lived.
+
+### Some numbers on one of our machine
 
 ```
 $ make run
+Benchmark: perm_count
 ---
-ocaml: 4.28s
+ocaml: 4.00s
 count: 3628800
 ---
-gc: 4.29s
+gc: 4.07s
 count: 3628800
 ---
-boxroot: 4.29s
+boxroot: 4.02s
 count: 3628800
 ---
-global: 45.01s
+global: 43.35s
 count: 3628800
 ---
-generational: 10.04s
+generational: 9.31s
 count: 3628800
+---
+Benchmark: synthetic
+---
+ocaml: 19.24s
+---
+gc: 17.65s
+---
+boxroot: 15.88s
+---
+global: 39.50s
+---
+generational: 25.10s
 ---
 ```
 
-We see that global roots add a large overhead (45s compared to 4.3s
-when using the OCaml GC), which is largely reduced by using
-generational global roots (10s). Whereas boxroots are competitive
-(4.3s) with implementations that do not use per-element roots.
+We see that global roots add a large overhead, which is reduced by
+using generational global roots. Boxroots outperform generational
+global roots, and are competitive with the reference implementations
+that do not use roots (ocaml and gc).
+
+Since the boxroot is directly inside a gc-allocated value, our
+benchmarks leave few opportunities for the version using boxroots
+outperforming the versions without roots. The repeatable
+outperformance of non-roots versions by the boxroot version in the
+second case could be explained by the greater cache locality of
+pointers to the heap during scanning.
 
 ## Implementation
 
@@ -160,7 +212,3 @@ scanning against a slightly sub-optimal overall occupancy.
 * Due to limitations of the GC hook interface, no work has been done
   to scan roots incrementally. Holding a large number of roots at the
   same time can negatively affect latency.
-
-* Memory reclamation is not fully supported yet. Ideally, we would
-  like to release accumulated free pools, if any, during compaction,
-  which is when the OCaml GC itself releases its own resources.
