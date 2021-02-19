@@ -257,8 +257,8 @@ static void ring_link(pool *p, pool *q)
 
 static void validate_pool(pool*);
 
-// insert the ring [source] in front of [*target]
-static void ring_concat(pool *source, pool **target)
+// insert the ring [source] at the back of [*target].
+static void ring_push_back(pool *source, pool **target)
 {
   if (source == NULL) return;
   if (*target == NULL) {
@@ -274,7 +274,6 @@ static void ring_concat(pool *source, pool **target)
     pool *source_last = source->hd.prev;
     ring_link(target_last, source);
     ring_link(source_last, *target);
-    *target = source;
   }
 }
 
@@ -310,13 +309,14 @@ static pool * get_uninitialised_pool()
   }
   pool *chunk = alloc_chunk();
   if (chunk == NULL) return NULL;
-  for (pool *p = chunk + POOLS_PER_CHUNK - 1; p >= chunk; p--) {
+  pool *end = chunk + POOLS_PER_CHUNK;
+  for (pool *p = chunk; p < end; p++) {
     ring_link(p, p);
     p->hd.free_list = NULL;
     p->hd.alloc_count = 0;
     p->hd.class = UNTRACKED;
     p->next_chunk = NULL;
-    ring_concat(p, &pools.uninitialised);
+    ring_push_back(p, &pools.uninitialised);
   }
   push_chunk(chunk);
   return ring_pop(&pools.uninitialised);
@@ -452,7 +452,8 @@ static pool * find_available_pool(int for_young)
   }
   if (new_pool == NULL) return NULL;
   new_pool->hd.class = for_young ? YOUNG : OLD;
-  ring_concat(new_pool, target);
+  ring_push_back(new_pool, target);
+  *target = new_pool;
   return new_pool;
 }
 
@@ -541,8 +542,7 @@ static void pool_reclassify(pool *p, occupancy occ)
   }
   // Add at the end instead of in front, since pools which have been
   // there longer might be better choices for selection.
-  ring_concat(p, target);
-  *target = (*target)->hd.next;
+  ring_push_back(p, target);
 }
 
 static void try_demote_pool(pool *p)
@@ -562,9 +562,19 @@ static void try_demote_pool(pool *p)
 
 static void promote_young_pools()
 {
-  pool *former_young_pool = pools.young_available;
-  ring_concat(pools.young_full, &pools.young_available);
-  pools.young_full = NULL;
+  // Promote full pools
+  pool *start = pools.young_full;
+  if (start != NULL) {
+    pool *p = start;
+    do {
+      p->hd.class = OLD;
+      p = p->hd.next;
+    } while (p != start);
+    ring_push_back(pools.young_full, &pools.old_full);
+    pools.young_full = NULL;
+  }
+  // Promote available pools
+  pool *head_young = pools.young_available;
   while (pools.young_available != NULL) {
     pool *p = ring_pop(&pools.young_available);
     occupancy occ = promotion_occupancy(p);
@@ -573,6 +583,15 @@ static void promote_young_pools()
     // into yet, or if it is the last available young pool.
     p->hd.class = (occ == EMPTY) ? UNTRACKED : OLD;
     pool_reclassify(p, occ);
+  }
+  // For very-low-latency applications: A program that does not use
+  // any boxroot should not have to pay the cost of scanning any pool.
+  assert(pools.young_available == NULL);
+  // Heuristic: if a young pool has just been allocated, it is better
+  // if it is the first one to be considered next time a young boxroot
+  // allocation takes place.
+  if (head_young != NULL && promotion_occupancy(head_young) == LOW) {
+    pools.old_low = head_young;
   }
 }
 
@@ -692,7 +711,7 @@ static void boxroot_reallocate(boxroot *root, pool *p, value new_value)
     // Better not fail in boxroot_modify. Expensive but fail-safe:
     pool_remove(p);
     p->hd.class = YOUNG;
-    ring_concat(p, &pools.young_available);
+    ring_push_back(p, &pools.young_available);
   }
 }
 
@@ -754,8 +773,6 @@ static void validate_pool(pool *pool)
 
 static void validate_all_pools()
 {
-  assert(pools.young_available != NULL);
-  assert(pools.old_available != NULL);
   FOREACH_GLOBAL_RING(global, class, {
       pool *start_pool = *global;
       if (start_pool == NULL) continue;
