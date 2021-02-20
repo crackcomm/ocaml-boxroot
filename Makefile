@@ -48,7 +48,6 @@ run-perm_count: all
 run-synthetic: all
 	$(call run_bench,"synthetic", \
 	    N=8 \
-	    CHOICE=ephemeral \
 	    SMALL_ROOTS=10_000 \
 	    LARGE_ROOTS=20 \
 	    SMALL_ROOT_PROMOTION_RATE=0.2 \
@@ -62,7 +61,7 @@ run-synthetic: all
 .PHONY: run-globroots
 run-globroots: all
 	$(call run_bench,"globroots", \
-	  CHOICE=persistent N=500_000 dune exec ./benchmarks/globroots.exe)
+	  N=500_000 dune exec ./benchmarks/globroots.exe)
 
 .PHONY: run
 run:
