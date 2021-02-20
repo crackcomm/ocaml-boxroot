@@ -1,4 +1,4 @@
-module Ref = Ref_config.Ref
+module Ref = Ref.Config.Ref
 
 (* We want to implement a *linear* choice monad, in the sense that the
    monadic combinators "consume" ownership of their inputs (in the
@@ -51,5 +51,5 @@ let fail : type a . unit -> a t = fun () -> fresh []
 let choice : type a . a t -> a t -> a t = fun l1 l2 ->
   fresh (List.rev_append (consume l1) (consume l2))
 
-let rec run : type a . a t -> (a -> unit) -> unit = fun li f ->
+let run : type a . a t -> (a -> unit) -> unit = fun li f ->
   List.iter (fun x -> f (Ref.consume x)) (consume li)

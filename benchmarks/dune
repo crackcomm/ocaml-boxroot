@@ -1,0 +1,20 @@
+(executable
+  (name perm_count)
+  (libraries ref choice)
+  (foreign_archives ../boxroot/boxroot)
+  (modules perm_count)
+)
+
+(executable
+  (name synthetic)
+  (libraries ref)
+  (foreign_archives ../boxroot/boxroot)
+  (modules synthetic)
+)
+
+(executable
+  (name globroots)
+  (libraries ref)
+  (foreign_archives ../boxroot/boxroot)
+  (modules globroots)
+)
