@@ -5,7 +5,7 @@
    && REF=global CHOICE=persistent N=500_000 ./globroots.exe
 *)
 
-module MakeTest(G: Ref_config.Ref) = struct
+module MakeTest(G: Ref.Config.Ref) = struct
 
   let size = 1024
 
@@ -48,9 +48,8 @@ module MakeTest(G: Ref_config.Ref) = struct
         a.(i) <- G.create vals.(i)
 
   let test n =
-    for i = 1 to n do
+    for _i = 1 to n do
       change();
-      (* print_string "."; flush stdout *)
     done
 end
 
@@ -60,7 +59,7 @@ let n =
     Printf.ksprintf failwith "We expected an environment variable N with an integer value."
 
 let _ =
-  Printf.printf "API: %s\n%!" Ref_config.implem_name;
-  let module Test = MakeTest(Ref_config.Ref) in
+  Printf.printf "API: %s\n%!" Ref.Config.implem_name;
+  let module Test = MakeTest(Ref.Config.Ref) in
   Test.test n;
   Printf.printf "time: %.2fs\n%!" (Sys.time ())

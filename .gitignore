@@ -2,3 +2,4 @@ _build
 *.bench
 compile_flags.txt
 .vscode
+**/.merlin

@@ -10,6 +10,9 @@ build:
     paths:
       - bench-log.txt
 
+  before_script:
+    - opam install --yes dune
+
   script:
     - make all
     - make run | tee bench-log.txt

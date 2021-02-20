@@ -1,4 +1,4 @@
-module Ref = Ref_config.Ref
+module Ref = Ref.Config.Ref
 
 type 'a mlist = | Nil | Cons of { hd : 'a; mutable tl: 'a mlist }
 
@@ -91,7 +91,7 @@ let bind f li =
 let fail () = fresh Nil
 let choice l1 l2 = fresh (mlist_append_in_place (consume l1) (consume l2))
 
-let rec run li f =
+let run li f =
   let rec iter f = function
     | Nil -> ()
     | Cons { hd = x; tl = xs } -> f (Ref.consume x); iter f xs

@@ -1,0 +1,11 @@
+(library
+  (name ref)
+  (foreign_stubs (language c) (names
+    abstract_out_of_heap
+    gc
+    boxroot
+    global
+    generational
+  ))
+  (foreign_archives ../../boxroot/boxroot)
+)

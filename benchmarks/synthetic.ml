@@ -1,3 +1,4 @@
+module Ref_config = Ref.Config
 module Ref = Ref_config.Ref
 
 (* a synthetic benchmark with tunable parameters.

@@ -20,12 +20,12 @@ module type LinChoice = sig
 end
 
 let implementations : (string * (module LinChoice)) list = [
-  "persistent", (module Choice_persistent);
-  "ephemeral", (module Choice_ephemeral);
+  "persistent", (module Persistent);
+  "ephemeral", (module Ephemeral);
 ]
 
 let implem_name, implem_module =
-  Ref_config.choose_implem "CHOICE" implementations
+  Ref.Config.choose_implem "CHOICE" implementations
 
 module Choice = struct
   include (val implem_module : LinChoice)

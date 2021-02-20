@@ -1,3 +1,4 @@
+module Choice_config = Choice.Config
 module Choice = Choice_config.Choice
 open Choice.Syntax
 
@@ -43,7 +44,7 @@ let n =
     Printf.ksprintf failwith "We expected an environment variable N with an integer value."
 
 let () =
-  Printf.printf "%s: %!" Ref_config.implem_name;
+  Printf.printf "%s: %!" Ref.Config.implem_name;
   let count = count_permutations n in
   Printf.printf "%.2fs\n%!" (Sys.time ());
   Printf.printf "count: %Ld\n%!" count;
