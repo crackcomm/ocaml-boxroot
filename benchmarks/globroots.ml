@@ -13,6 +13,8 @@ module MakeTest(G: Ref_config.Ref) = struct
 
   let a = Array.init size (fun i -> G.create (Int.to_string i))
 
+  let tick = ref (0,1)
+
   let check () =
     for i = 0 to size - 1 do
       if G.get a.(i) <> vals.(i) then begin
@@ -22,6 +24,9 @@ module MakeTest(G: Ref_config.Ref) = struct
     done
 
   let change () =
+    (* Make sure at least one minor allocation takes place between any
+       two collections. *)
+    tick := (match !tick with (a,b) -> (b,a));
     match Random.int 37 with
     | 0 ->
         Gc.full_major()

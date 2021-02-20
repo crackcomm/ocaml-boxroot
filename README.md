@@ -52,7 +52,8 @@ The benchmarks compares various implementation of an OCaml reference
 type Ref containing a single value with an imperative interface
 (`create`, `get`, `delete`, `modify`):
 
-- `ocaml`: a pure-OCaml implementation using plain references,
+- `ocaml`: an OCaml implementation using a mutable record, with
+  deletion implemented by assigning `()` using Obj.magic.
 - `gc`: a C implementation using `caml_alloc_small(1,0)`,
 - `boxroot`: an abstract block (in the OCaml heap) containing a
   `boxroot`,
@@ -61,9 +62,12 @@ type Ref containing a single value with an imperative interface
 - `generational`: an abstract block (outside the heap) containing a
   generational global root.
 
+The various implementations have similar memory representation, some
+on the heap and some outside of the heap.
+
 By selecting different implementations of Ref, we can evaluate the
-overhead of root registration and scanning for various
-implementations, compared to a pure OCaml implementation.
+overhead of root registration and scanning for various root
+implementations, compared to non-rooting OCaml and C implementations.
 
 ### Permutations of a list
 
@@ -102,38 +106,61 @@ These settings favour the creation of a lot of roots, most of which
 are short-lived. Roots that survive are few, but they are very
 long-lived.
 
+### Globroot benchmark
+
+This benchmark is adapted from the OCaml testsuite. It exercises the
+case where there are about 1024 concurrently-live roots, but only a
+couple of young roots are created between two minor collections.
+
 ### Some numbers on one of our machine
 
 ```
 $ make run
 Benchmark: perm_count
 ---
-ocaml: 4.00s
+ocaml: 3.51s
 count: 3628800
 ---
-gc: 4.07s
+gc: 3.53s
 count: 3628800
 ---
-boxroot: 4.02s
+boxroot: 3.46s
 count: 3628800
 ---
-global: 43.35s
+global: 43.94s
 count: 3628800
 ---
-generational: 9.31s
+generational: 8.28s
 count: 3628800
 ---
 Benchmark: synthetic
 ---
-ocaml: 19.24s
+ocaml: 16.54s
 ---
-gc: 17.65s
+gc: 16.50s
 ---
-boxroot: 15.88s
+boxroot: 14.53s
 ---
-global: 39.50s
+global: 39.90s
 ---
-generational: 25.10s
+generational: 24.60s
+---
+Benchmark: globroots
+---
+API: ocaml
+time: 2.33s
+---
+API: gc
+time: 2.39s
+---
+API: boxroot
+time: 3.08s
+---
+API: global
+time: 2.32s
+---
+API: generational
+time: 2.11s
 ---
 ```
 
@@ -146,8 +173,18 @@ Since the boxroot is directly inside a gc-allocated value, our
 benchmarks leave few opportunities for the version using boxroots
 outperforming the versions without roots. The repeatable
 outperformance of non-roots versions by the boxroot version in the
-second case could be explained by the greater cache locality of
-pointers to the heap during scanning.
+second case could be explained by the greater cache locality during
+scanning.
+
+The `globroot` benchmark tests the case where there are few
+concurrently-live roots and little root creation and modification
+between two collections. In this benchmark, there are about 67000
+minor collections and 40000 major collections. Skiplist-based
+implementations perform well, whereas boxroot is the slowest.
+`boxroot` has to scan a complete memory pool at every minor collection
+even if there are only a few young roots, for a pool size currently
+chosen large (16KB). In this benchmark, the constant overhead is about
+10µs per minor collection.
 
 ## Implementation
 
@@ -198,6 +235,9 @@ devoted to slots containing young values, or available for the
 allocation of young values (disregarding some optimisation in
 `boxroot_modify`). This amounts to trading efficiency guarantees of
 scanning against a slightly sub-optimal overall occupancy.
+
+Care is taken so that programs that do not allocate any root do not
+pay any of the cost.
 
 ## Limitations
 
