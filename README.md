@@ -148,19 +148,19 @@ generational: 24.60s
 Benchmark: globroots
 ---
 API: ocaml
-time: 2.33s
+time: 2.17s
 ---
 API: gc
-time: 2.39s
+time: 2.13s
 ---
 API: boxroot
-time: 3.08s
+time: 2.54s
 ---
 API: global
-time: 2.32s
+time: 2.19s
 ---
 API: generational
-time: 2.11s
+time: 2.14s
 ---
 ```
 
