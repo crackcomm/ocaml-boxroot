@@ -175,19 +175,19 @@ $ make run-globroots
 Benchmark: globroots
 ---
 API: ocaml
-time: 2.33s
+time: 2.56s
 ---
 API: gc
-time: 2.39s
+time: 2.46s
 ---
 API: boxroot
-time: 3.08s
+time: 2.80s
 ---
 API: global
-time: 2.32s
+time: 2.61s
 ---
 API: generational
-time: 2.11s
+time: 2.19s
 ```
 
 In this benchmark, there are about 67000 minor collections and

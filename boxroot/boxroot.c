@@ -37,13 +37,6 @@
 /* Log of the size of the pools (12 = 4KB, an OS page).
    Recommended: 14. */
 #define POOL_LOG_SIZE 14
-/* Size of a chunk. Several pools are allocated at once (set to
-   POOL_LOG_SIZE to disable). Free pools are put aside and re-used
-   instead of being immediately freed. A bigger chunk size has visible
-   effect for the large pool sizes like recommended with glibc malloc.
-   Memory is reclaimed at the end of every non-minor scanning.
-   Recommended: 22. (21 = 2MB, a huge page.) */
-#define CHUNK_LOG_SIZE 22
 /* Check integrity of pool structure after each scan, and print
    additional statistics? (slow)
    This can also be enabled by defining the macro BOXROOT_DEBUG.
@@ -59,15 +52,8 @@
 #define DEBUG 1
 #endif
 
-static_assert(CHUNK_LOG_SIZE >= POOL_LOG_SIZE,
-              "chunk size smaller than pool size");
-
 #define POOL_SIZE ((size_t)1 << POOL_LOG_SIZE)
-#define CHUNK_SIZE ((size_t)1 << CHUNK_LOG_SIZE)
-#define CHUNK_ALIGNMENT POOL_SIZE
-#define POOLS_PER_CHUNK (CHUNK_SIZE / POOL_SIZE)
-
-static_assert(POOLS_PER_CHUNK <= SHRT_MAX, "too many pools per chunk");
+#define POOL_ALIGNMENT POOL_SIZE
 
 /* }}} */
 
@@ -76,8 +62,7 @@ static_assert(POOLS_PER_CHUNK <= SHRT_MAX, "too many pools per chunk");
 typedef enum class {
   YOUNG,
   OLD,
-  UNTRACKED,
-  MARKED_FOR_DEALLOCATION
+  UNTRACKED
 } class;
 
 typedef void * slot;
@@ -90,10 +75,14 @@ struct header {
   class class;
 };
 
+struct footer {
+  slot unused_padding;
+};
+
 static_assert(POOL_SIZE / sizeof(slot) <= INT_MAX, "pool size too large");
 
 #define POOL_ROOTS_CAPACITY                                 \
-  ((int)((POOL_SIZE - sizeof(struct header)) / sizeof(slot) - 1))
+  ((int)((POOL_SIZE - sizeof(struct header) - sizeof(struct footer)) / sizeof(slot)))
 /* &pool->roots[POOL_ROOTS_CAPACITY] can end up as a placeholder value
    in the freelist to denote the last element of the freelist,
    starting from after releasing from a full pool for the first time.
@@ -101,17 +90,16 @@ static_assert(POOL_SIZE / sizeof(slot) <= INT_MAX, "pool size too large");
    [is_pool_member(v, pool)], we ensure the roots array end before the
    pool ends. */
 
+static_assert(sizeof(struct footer) >= 1,
+  "footer must be non-empty so that the end-of-roots pointer falls inside the pool");
+
 typedef struct pool {
   struct header hd;
   /* Occupied slots are OCaml values. Unoccupied slots are a pointer
      to the next slot in the free list, or to the end of the array,
      denoting the last element of the free list. */
   slot roots[POOL_ROOTS_CAPACITY];
-  /* As explained above, we need a gap of at least one before the next
-     pool in the chunk. We use it to store a list of all allocated
-     chunks. It is NULL unless this is the first pool in its chunk. In
-     the latter case, it points to the next allocated chunk. */
-  struct pool *next_chunk;
+  struct footer ft;
 } pool;
 
 static_assert(sizeof(pool) == POOL_SIZE, "bad pool size");
@@ -140,20 +128,26 @@ static struct {
   /* Full or almost. Not considered for allocation. */
   pool *young_full;
 
-/* Pools containing no root: not scanned.*/
-  /* Initialized */
+/* Pools containing no root: not scanned.
+
+   We could free these pools immediately, but this could lead to
+   stuttering behavior for workloads that regularly come back to
+   0 boxroots alive. Instead we wait for the next major slice to free
+   empty pools.
+ */
   pool *free;
-  /* Unitialised */
-  pool *uninitialised;
 } pools;
 
 static pool ** const global_rings[] =
   { &pools.old_full, &pools.old_available, &pools.old_low,
-    &pools.young_available, &pools.young_full, &pools.free,
-    &pools.uninitialised, NULL };
+    &pools.young_available, &pools.young_full,
+    &pools.free,
+    NULL };
 
 static const class global_ring_classes[] =
-  { OLD, OLD, OLD, YOUNG, YOUNG, UNTRACKED, UNTRACKED };
+  { OLD, OLD, OLD,
+    YOUNG, YOUNG,
+    UNTRACKED };
 
 /* Iterate on all global rings.
    [global_ring]: a variable of type [pool**].
@@ -190,9 +184,8 @@ struct stats {
   int64_t total_major_time;
   int64_t peak_minor_time;
   int64_t peak_major_time;
-  int total_alloced_chunks;
-  int total_freed_chunks;
   int total_alloced_pools;
+  int total_freed_pools;
   int live_pools; // number of tracked pools
   int peak_pools; // max live pools at any time
   int ring_operations; // Number of times hd.next is mutated
@@ -244,25 +237,22 @@ static inline int is_young_block(value v)
 
 /* {{{ Platform-specific allocation */
 
-static pool *last_chunk = NULL;
-
-static void * alloc_chunk()
+static void * alloc_uninitialised_pool()
 {
   void *p = NULL;
   // TODO: portability?
   // Win32: p = _aligned_malloc(size, alignment);
-  int err = posix_memalign(&p, CHUNK_ALIGNMENT, CHUNK_SIZE);
+  int err = posix_memalign(&p, POOL_ALIGNMENT, POOL_SIZE);
   assert(err != EINVAL);
   if (err == ENOMEM) return NULL;
   assert(p != NULL);
-  ++stats.total_alloced_chunks;
+  ++stats.total_alloced_pools;
   return p;
 }
 
-static void free_chunk(void *p)
-{
-  // Win32: _aligned_free(p);
-  free(p);
+static void free_pool(pool *p) {
+    // Win32: _aligned_free(p);
+    free(p);
 }
 
 /* }}} */
@@ -317,44 +307,27 @@ static pool * ring_pop(pool **target)
 
 /* {{{ Pool management */
 
-static void push_chunk(pool *p)
-{
-  p->next_chunk = last_chunk;
-  last_chunk = p;
-}
-
 static pool * get_uninitialised_pool()
 {
-  if (pools.uninitialised != NULL) {
-    return ring_pop(&pools.uninitialised);
-  }
-  pool *chunk = alloc_chunk();
-  if (chunk == NULL) return NULL;
-  pool *end = chunk + POOLS_PER_CHUNK;
-  // Add the pools in order so that the first pools in the chunk are
-  // allocated first.
-  for (pool *p = chunk; p < end; p++) {
-    ring_link(p, p);
-    p->hd.free_list = NULL;
-    p->hd.alloc_count = 0;
-    p->hd.class = UNTRACKED;
-    p->next_chunk = NULL;
-    ring_push_back(p, &pools.uninitialised);
-  }
-  push_chunk(chunk);
-  return ring_pop(&pools.uninitialised);
+  pool *p = alloc_uninitialised_pool();
+  if (p == NULL) return NULL;
+  ring_link(p, p);
+  p->hd.free_list = NULL;
+  p->hd.alloc_count = 0;
+  p->hd.class = UNTRACKED;
+  p->ft.unused_padding = NULL;
+  return p;
 }
 
-static pool * alloc_pool()
+static pool * get_empty_pool()
 {
-  ++stats.total_alloced_pools;
   ++stats.live_pools;
   if (stats.live_pools > stats.peak_pools) stats.peak_pools = stats.live_pools;
   pool *out = get_uninitialised_pool();
 
   if (out == NULL) return NULL;
 
-  slot *end = &out->roots[POOL_ROOTS_CAPACITY];
+  slot *end = out->roots + POOL_ROOTS_CAPACITY;
   slot *s = out->roots;
   while (s < end) {
     slot *next = s + 1;
@@ -374,80 +347,18 @@ static void pool_remove(pool *p)
     });
 }
 
-/* Forcibly free all chunks, for shutdown. */
-static void free_all_chunks()
-{
-  pool *chunk = last_chunk;
-  while (chunk != NULL) {
-    pool *old = chunk;
-    chunk = chunk->next_chunk;
-    free_chunk(old);
+static void free_pool_ring(pool **ring) {
+  while (*ring != NULL) {
+      pool *p = ring_pop(ring);
+      free_pool(p);
   }
-  last_chunk = NULL;
-  FOREACH_GLOBAL_RING(global, cl, { *global = NULL; });
 }
 
-/* Mark pools in a chunk if all are untracked. */
-static int mark_free_chunk(pool *chunk)
+static void free_all_pools()
 {
-  pool *end = chunk + POOLS_PER_CHUNK;
-  // The initialized chunks come first, so that we exit early if some
-  // pool is not UNTRACKED.
-  for (pool *p = chunk; p != end; p++) {
-    if (p->hd.class != UNTRACKED) return 0;
-  }
-  // All the pools are untracked, we can mark the pools in this chunk.
-  for (pool *p = chunk; p != end; p++) {
-    p->hd.class = MARKED_FOR_DEALLOCATION;
-  }
-  return 1;
-}
-
-/* Free all chunks whose pools are all untracked; non-destructive.
-   Returns number of chunks freed. */
-static int try_free_chunks()
-{
-  // Mark free chunks
-  int marked = 0;
-  for (pool *chunk = last_chunk; chunk != NULL; chunk = chunk->next_chunk) {
-    marked += mark_free_chunk(chunk);
-  }
-  if (!marked) return 0;
-  // Sweep global rings
   FOREACH_GLOBAL_RING(global, cl, {
-      if (cl != UNTRACKED) continue;
-      pool *start = *global;
-      if (start == NULL) continue;
-      pool *last = NULL;
-      pool *p = start;
-      do {
-        if (p->hd.class == MARKED_FOR_DEALLOCATION) {
-          if (global == &pools.free) --stats.live_pools;
-        } else {
-          if (last == NULL) start = p;
-          else if (p->hd.prev != last) ring_link(last, p);
-          last = p;
-        }
-        p = p->hd.next;
-      } while (p != start);
-      if (last != NULL) ring_link(last, start);
-      *global = last;
-    });
-  // Free free chunks
-  int freed = 0;
-  pool *chunk = last_chunk;
-  last_chunk = NULL;
-  while (chunk != NULL) {
-    pool *old_chunk = chunk;
-    chunk = chunk->next_chunk;
-    if (old_chunk->hd.class == MARKED_FOR_DEALLOCATION) {
-      free_chunk(old_chunk);
-      freed++;
-    } else {
-      push_chunk(old_chunk);
-    }
-  }
-  return freed;
+    free_pool_ring(global);
+  });
 }
 
 /* }}} */
@@ -475,8 +386,7 @@ static pool * find_available_pool(int for_young)
   } else if (pools.free != NULL) {
     new_pool = ring_pop(&pools.free);
   } else {
-    // High time we allocate a pool.
-    new_pool = alloc_pool();
+    new_pool = get_empty_pool();
   }
   if (new_pool == NULL) return NULL;
   new_pool->hd.class = for_young ? YOUNG : OLD;
@@ -773,13 +683,12 @@ void boxroot_modify(boxroot *root, value new_value)
 
 static void validate_pool(pool *pool)
 {
-  assert(pool->hd.class != MARKED_FOR_DEALLOCATION);
   if (pool->hd.free_list == NULL) {
     // an unintialised pool
     assert(pool->hd.class == UNTRACKED);
     return;
   }
-  slot *pool_end = &pool->roots[POOL_ROOTS_CAPACITY];
+  slot *pool_end = pool->roots + POOL_ROOTS_CAPACITY;
   // check freelist structure and length
   slot *curr = pool->hd.free_list;
   int length = 0;
@@ -870,7 +779,7 @@ static void scan_roots(scanning_action action)
     stats.total_scanning_work_minor += work;
   } else {
     stats.total_scanning_work_major += work;
-    stats.total_freed_chunks += try_free_chunks(pools.free);
+    free_pool_ring(&pools.free);
   }
   if (DEBUG) validate_all_pools();
 }
@@ -935,31 +844,23 @@ void boxroot_print_stats()
   int64_t time_per_minor = stats.total_minor_time / stats.minor_collections;
   int64_t time_per_major = stats.total_major_time / stats.major_collections;
 
-  printf("POOL_LOG_SIZE: %d (%'d KiB, %'d roots)\n"
-         "CHUNK_LOG_SIZE: %d\n"
+  printf("POOL_LOG_SIZE: %d (%'d KiB, %'d roots/pool)\n"
+         "POOL_ALIGNMENT: %'d kiB\n"
          "DEBUG: %d\n"
          "WITH_EXPECT: 1\n",
          (int)POOL_LOG_SIZE, kib_of_pools((int)1, 1), (int)POOL_ROOTS_CAPACITY,
-         (int)CHUNK_LOG_SIZE,
+         kib_of_pools(POOL_ALIGNMENT / POOL_SIZE,1),
          (int)DEBUG);
 
-  printf("CHUNK_SIZE: %'d kiB (%'d pools)\n"
-         "CHUNK_ALIGNMENT: %'d kiB\n"
-         "total allocated chunks: %'d (%'d MiB, %'d pools)\n"
-         "total freed chunks: %'d (%'d MiB, %'d pools)\n",
-         kib_of_pools(POOLS_PER_CHUNK,1), (int)POOLS_PER_CHUNK,
-         kib_of_pools(CHUNK_ALIGNMENT / POOL_SIZE,1),
-         stats.total_alloced_chunks,
-         kib_of_pools(stats.total_alloced_chunks * POOLS_PER_CHUNK, 2),
-         stats.total_alloced_chunks * (int)POOLS_PER_CHUNK,
-         stats.total_freed_chunks,
-         kib_of_pools(stats.total_freed_chunks * POOLS_PER_CHUNK, 2),
-         stats.total_freed_chunks * (int)POOLS_PER_CHUNK);
-
-  printf("total allocated pools: %'d (%'d MiB)\n"
-         "peak allocated pools: %'d (%'d MiB)\n",
-         stats.total_alloced_pools, kib_of_pools(stats.total_alloced_pools, 2),
-         stats.peak_pools, kib_of_pools(stats.peak_pools, 2));
+  printf("total allocated pool: %'d (%'d MiB)\n"
+         "peak allocated pools: %'d (%'d MiB)\n"
+         "total freed pool: %'d (%'d MiB)\n",
+         stats.total_alloced_pools,
+         kib_of_pools(stats.total_alloced_pools, 2),
+         stats.peak_pools,
+         kib_of_pools(stats.peak_pools, 2),
+         stats.total_freed_pools,
+         kib_of_pools(stats.total_freed_pools, 2));
 
   printf("work per minor: %'d\n"
          "work per major: %'d\n"
@@ -1085,7 +986,7 @@ void boxroot_teardown()
   caml_scan_roots_hook = prev_scan_roots_hook;
   caml_minor_gc_begin_hook = prev_minor_begin_hook;
   caml_minor_gc_end_hook = prev_minor_end_hook;
-  free_all_chunks();
+  free_all_pools();
   setup = 0;
   CRITICAL_SECTION_END();
 }
