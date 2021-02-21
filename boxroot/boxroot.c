@@ -22,6 +22,11 @@
 #include <caml/major_gc.h>
 #include <caml/compact.h>
 
+#if defined(_POSIX_TIMERS) && defined(_POSIX_MONOTONIC_CLOCK)
+#define POSIX_CLOCK
+#include <time.h>
+#endif
+
 /* }}} */
 
 /* {{{ Parameters */
@@ -169,6 +174,10 @@ struct stats {
   int total_modify;
   long long total_scanning_work_minor;
   long long total_scanning_work_major;
+  int64_t total_minor_time;
+  int64_t total_major_time;
+  int64_t peak_minor_time;
+  int64_t peak_major_time;
   int total_alloced_chunks;
   int total_freed_chunks;
   int total_alloced_pools;
@@ -851,6 +860,17 @@ static void scan_roots(scanning_action action)
 
 /* {{{ Statistics */
 
+static int64_t time_counter(void)
+{
+#if defined(POSIX_CLOCK)
+  struct timespec t;
+  clock_gettime(CLOCK_MONOTONIC, &t);
+  return (int64_t)t.tv_sec * (int64_t)1000000000 + (int64_t)t.tv_nsec;
+#else
+  return 0;
+#endif
+}
+
 // 1=KiB, 2=MiB
 static int kib_of_pools(int count, int unit)
 {
@@ -893,6 +913,9 @@ void boxroot_print_stats()
 
   if (!boxroot_used() && total_scanning_work == 0) return;
 
+  int64_t time_per_minor = stats.total_minor_time / stats.minor_collections;
+  int64_t time_per_major = stats.total_major_time / stats.major_collections;
+
   printf("POOL_LOG_SIZE: %d (%'d KiB, %'d roots)\n"
          "CHUNK_LOG_SIZE: %d\n"
          "DEBUG: %d\n"
@@ -925,6 +948,17 @@ void boxroot_print_stats()
          scanning_work_minor,
          scanning_work_major,
          total_scanning_work, stats.total_scanning_work_minor, stats.total_scanning_work_major);
+
+#if defined(POSIX_CLOCK)
+  printf("average time per minor: %'lldns\n"
+         "average time per major: %'lldns\n"
+         "peak time per minor: %'lldns\n"
+         "peak time per major: %'lldns\n",
+         (long long)time_per_minor,
+         (long long)time_per_major,
+         (long long)stats.peak_minor_time,
+         (long long)stats.peak_major_time);
+#endif
 
   printf("total ring operations: %'d\n"
          "ring operations per pool: %'d\n",
@@ -963,17 +997,22 @@ static void scanning_callback(scanning_action action)
   if (prev_scan_roots_hook != NULL) {
     (*prev_scan_roots_hook)(action);
   }
-  if (in_minor_collection) {
-    ++stats.minor_collections;
-  } else {
-    ++stats.major_collections;
-  }
+  if (in_minor_collection) ++stats.minor_collections;
+  else ++stats.major_collections;
   // If no boxroot has been allocated, then scan_roots should not have
   // any noticeable cost. For experimental purposes, since this hook
   // is also used for other the statistics of other implementations,
   // we further make sure of this with an extra test, by avoiding
   // calling scan_roots if it has only just been initialised.
-  if (boxroot_used()) scan_roots(action);
+  if (boxroot_used()) {
+    int64_t start = time_counter();
+    scan_roots(action);
+    int64_t duration = time_counter() - start;
+    int64_t *total = in_minor_collection ? &stats.total_minor_time : &stats.total_major_time;
+    int64_t *peak = in_minor_collection ? &stats.peak_minor_time : &stats.peak_major_time;
+    *total += duration;
+    if (duration > *peak) *peak = duration;
+  }
 }
 
 static caml_timing_hook prev_minor_begin_hook = NULL;
