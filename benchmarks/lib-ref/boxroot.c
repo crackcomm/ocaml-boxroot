@@ -39,12 +39,17 @@ value boxroot_ref_setup(value unit)
   return unit;
 }
 
+value boxroot_stats(value unit)
+{
+  char *old_locale = setlocale(LC_NUMERIC, NULL);
+  setlocale(LC_NUMERIC, "en_US.UTF-8");
+  boxroot_print_stats();
+  setlocale(LC_NUMERIC, old_locale);
+  return unit;
+}
+
 value boxroot_ref_teardown(value unit)
 {
-#ifdef BOXROOT_STATS
-  setlocale(LC_ALL, "en_US.UTF-8");
-  boxroot_print_stats();
-#endif
   boxroot_teardown();
   return unit;
 }

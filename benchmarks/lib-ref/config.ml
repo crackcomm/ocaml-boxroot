@@ -32,6 +32,16 @@ let implementations : (string * (module Ref)) list = [
 let implem_name, implem_module =
   choose_implem "REF" implementations
 
+let () =
+  match Sys.getenv "STATS" with
+  | exception _ -> ()
+  | "1" | "true" | "yes" -> Boxroot_ref.show_stats := true
+  | "0" | "false" | "no" -> Boxroot_ref.show_stats := false
+  | other ->
+    Printf.eprintf "Unknown value %S for the environment variable STATS.\n\
+                    Expected 'true' or 'false'.\n%!"
+      other
+
 module Ref = struct
   include (val implem_module : Ref)
 

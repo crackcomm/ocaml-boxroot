@@ -7,6 +7,12 @@ external delete : 'a t -> unit       = "boxroot_ref_delete" [@@noalloc]
 external setup : unit -> unit = "boxroot_ref_setup"
 external teardown : unit -> unit = "boxroot_ref_teardown"
 
+external stats : unit -> unit = "boxroot_stats"
+
+let show_stats = ref false
+
 let () =
   setup ();
-  at_exit (fun () -> teardown ())
+  at_exit (fun () ->
+    if !show_stats then stats ();
+    teardown ())
