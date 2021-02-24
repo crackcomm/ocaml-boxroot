@@ -9,8 +9,10 @@
 
 #include "../boxroot/boxroot.h"
 
-extern value caml_equal(value, value);
-
+/* a fixpoint-computation function defined using the usual C-FFI style
+   for OCaml values, following the "callee roots" convention:
+   a function is passed value that may be unrooted, and it is
+   responsible for rooting them if it may call the GC. */
 value local_fixpoint(value f, value x) {
   CAMLparam2(f, x);
   CAMLlocal1(y);
@@ -22,6 +24,10 @@ value local_fixpoint(value f, value x) {
   }
 }
 
+/* a different version that uses our 'boxroot' library to implement
+   a "caller roots" convention: a function is passed functions that
+   have already been rooted into boxroots, and it may itself pass them
+   around to its own callee without re-rooting. */
 #define BOX(v) boxroot_create(v)
 #define GET(b) boxroot_get(b)
 #define DROP(b) boxroot_delete(b)
@@ -67,4 +73,46 @@ value caml_boxroot_stats(value unit)
   boxroot_print_stats();
   setlocale(LC_NUMERIC, old_locale);
   return unit;
+}
+
+
+/* This is a variation of the caller-root example using "fake
+   boxroots", namely malloced blocks containing generational global
+   roots. This should be sensibly slower than boxroot, we are using it
+   as a "control" that the benchmark makes sense. */
+typedef value *genroot;
+
+static inline value GEN_GET(genroot b) {
+  return *b;
+}
+
+static inline genroot GEN_BOX(value v) {
+  value *b = malloc(sizeof(value));
+  *b = v;
+  caml_register_generational_global_root(b);
+  return b;
+}
+
+static inline void GEN_DROP(genroot b) {
+  caml_remove_generational_global_root(b);
+  free(b);
+}
+
+genroot generational_fixpoint_rooted(genroot f, genroot x) {
+  genroot y = GEN_BOX(caml_callback(GEN_GET(f), GEN_GET(x)));
+  if (Double_val(GEN_GET(x)) == Double_val(GEN_GET(y))) {
+    GEN_DROP(f);
+    GEN_DROP(x);
+    return y;
+  } else {
+    GEN_DROP(x);
+    return generational_fixpoint_rooted(f, y);
+  }
+}
+
+value generational_fixpoint(value f, value x) {
+  genroot y = generational_fixpoint_rooted(GEN_BOX(f), GEN_BOX(x));
+  value v = GEN_GET(y);
+  GEN_DROP(y);
+  return v;
 }

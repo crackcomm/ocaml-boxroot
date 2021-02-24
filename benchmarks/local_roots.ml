@@ -1,20 +1,23 @@
 external local_fixpoint : (float -> float) -> float -> float = "local_fixpoint"
 external boxroot_fixpoint : (float -> float) -> float -> float = "boxroot_fixpoint"
+external generational_fixpoint : (float -> float) -> float -> float = "generational_fixpoint"
 
 external boxroot_setup : unit -> unit = "caml_boxroot_setup"
 external boxroot_teardown : unit -> unit = "caml_boxroot_teardown"
 
 external boxroot_stats : unit -> unit = "caml_boxroot_stats"
 
+let implementations = [
+  "local", local_fixpoint;
+  "boxroot", boxroot_fixpoint;
+  "generational", generational_fixpoint;
+]
+
 let fixpoint =
-  match Sys.getenv "ROOT" with
-  | "local" -> local_fixpoint
-  | "boxroot" -> boxroot_fixpoint
-  | other ->
-    Printf.eprintf "Unknown environment value ROOT=%S, expected 'local' or 'boxroot'" other;
-    exit 2
-  | exception _ ->
-    Printf.eprintf "We expect an environment variable ROOT, defined as either 'local' or 'boxroot'";
+  try List.assoc (Sys.getenv "ROOT") implementations with
+  | _ ->
+    Printf.eprintf "We expect an environment variable ROOT with value one of [ %s ].\n%!"
+      (String.concat " | " (List.map fst implementations));
     exit 2
 
 let n =
@@ -36,5 +39,6 @@ let () =
   done;
   if show_stats then boxroot_stats ();
   boxroot_teardown ();
-  Printf.printf "local_roots(ROOT=%-7s, N=%s): %.2fs\n%!"
+  Printf.printf "local_roots(ROOT=%-*s, N=%s): %.2fs\n%!"
+    (List.fold_left max 0 (List.map String.length (List.map fst implementations)))
     (Sys.getenv "ROOT") (Sys.getenv "N") (Sys.time ())
