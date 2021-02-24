@@ -63,11 +63,21 @@ run-globroots: all
 	$(call run_bench,"globroots", \
 	  N=500_000 dune exec ./benchmarks/globroots.exe)
 
+.PHONY: run-local_roots
+run-local_roots: all
+	echo "Benchmark: local_roots" \
+	&& echo "---" \
+	$(foreach N, 1 2 5 10 100 1000, \
+	  $(foreach ROOT, local boxroot, \
+	    && (N=$(N) ROOT=$(ROOT) dune exec ./benchmarks/local_roots.exe; echo "---") \
+	  ))
+
 .PHONY: run
 run:
 	$(MAKE) run-perm_count
 	$(MAKE) run-synthetic
 	$(MAKE) run-globroots
+	$(MAKE) run-local_roots
 
 .PHONY: test-boxroot
 test-boxroot: all

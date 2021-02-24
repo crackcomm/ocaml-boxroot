@@ -31,8 +31,10 @@ let show_stats =
 
 let () =
   boxroot_setup ();
-  for _i = 1 to (100_000_000 / n) do
-    ignore (fixpoint (fun x -> if truncate x >= n then x else x +. 1.) 0.)
+  for _i = 1 to (100_000_000 / (max 1 n)) do
+    ignore (fixpoint (fun x -> if truncate x >= n then x else x +. 1.) 1.)
   done;
   if show_stats then boxroot_stats ();
   boxroot_teardown ();
+  Printf.printf "local_roots(ROOT=%-7s, N=%s): %.2fs\n%!"
+    (Sys.getenv "ROOT") (Sys.getenv "N") (Sys.time ())
