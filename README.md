@@ -83,6 +83,32 @@ value is registered as a GC root.
 
 This benchmark creates a lot of roots alive at the same time.
 
+```
+$ make run-perm_count
+Benchmark: perm_count
+---
+ocaml: 3.51s
+count: 3628800
+---
+gc: 3.53s
+count: 3628800
+---
+boxroot: 3.46s
+count: 3628800
+---
+global: 43.94s
+count: 3628800
+---
+generational: 8.28s
+count: 3628800
+```
+
+We see that global roots add a large overhead, which is reduced by
+using generational global roots. Boxroots outperform generational
+global roots, and are competitive with the reference implementations
+that do not use roots (ocaml and gc).
+
+
 ### Synthetic benchmark
 
 In this benchmark, we allocate and deallocate values and roots
@@ -106,33 +132,8 @@ These settings favour the creation of a lot of roots, most of which
 are short-lived. Roots that survive are few, but they are very
 long-lived.
 
-### Globroot benchmark
-
-This benchmark is adapted from the OCaml testsuite. It exercises the
-case where there are about 1024 concurrently-live roots, but only a
-couple of young roots are created between two minor collections.
-
-### Some numbers on one of our machine
-
 ```
-$ make run
-Benchmark: perm_count
----
-ocaml: 3.51s
-count: 3628800
----
-gc: 3.53s
-count: 3628800
----
-boxroot: 3.46s
-count: 3628800
----
-global: 43.94s
-count: 3628800
----
-generational: 8.28s
-count: 3628800
----
+$ make run-synthetic
 Benchmark: synthetic
 ---
 ocaml: 16.54s
@@ -144,47 +145,176 @@ boxroot: 14.53s
 global: 39.90s
 ---
 generational: 24.60s
----
-Benchmark: globroots
----
-API: ocaml
-time: 2.33s
----
-API: gc
-time: 2.39s
----
-API: boxroot
-time: 3.08s
----
-API: global
-time: 2.32s
----
-API: generational
-time: 2.11s
----
 ```
-
-We see that global roots add a large overhead, which is reduced by
-using generational global roots. Boxroots outperform generational
-global roots, and are competitive with the reference implementations
-that do not use roots (ocaml and gc).
 
 Since the boxroot is directly inside a gc-allocated value, our
 benchmarks leave few opportunities for the version using boxroots
 outperforming the versions without roots. The repeatable
-outperformance of non-roots versions by the boxroot version in the
-second case could be explained by the greater cache locality during
-scanning.
+outperformance of non-roots versions by the boxroot version
+in this benchmark  could be explained by the greater cache locality
+during scanning.
 
-The `globroot` benchmark tests the case where there are few
-concurrently-live roots and little root creation and modification
-between two collections. In this benchmark, there are about 67000
-minor collections and 40000 major collections. Skiplist-based
-implementations perform well, whereas boxroot is the slowest.
-`boxroot` has to scan a complete memory pool at every minor collection
-even if there are only a few young roots, for a pool size currently
-chosen large (16KB). In this benchmark, the constant overhead is about
-10µs per minor collection.
+
+### Globroot benchmark
+
+This benchmark is adapted from the OCaml testsuite. It exercises the
+case where there are about 1024 concurrently-live roots, but only a
+couple of young roots are created between two minor collections.
+
+This benchmark tests the case where there are few
+concurrently-live roots and little root creation and
+modification between two collections. This corresponds to
+a common scenario where the FFI is rarely used, except that
+this benchmark does not perform any OCaml computations or
+allocations (it forces collections to occur very often despite
+low GC work), so the cost of root handling is magnified, it
+would normally be amortized by OCaml computations.
+
+```
+$ make run-globroots
+Benchmark: globroots
+---
+API: ocaml
+time: 2.17s
+---
+API: gc
+time: 2.13s
+---
+API: boxroot
+time: 2.54s
+---
+API: global
+time: 2.19s
+---
+API: generational
+time: 2.14s
+```
+
+In this benchmark, there are about 67000 minor collections and
+40000 major collections. Skiplist-based implementations
+perform well, whereas boxroot is the slowest. `boxroot` has
+to scan a complete memory pool at every minor collection even
+if there are only a few young roots, for a pool size currently
+chosen large (16KB). In this benchmark, the constant overhead
+is about 10µs per minor collection.
+
+### Local roots benchmark
+
+We designed this benchmark to test the idea of replacing local
+roots altogether by boxroots.
+
+Currently, OCaml FFI code uses a "callee-roots" discipline
+where each function has to locally "root" each OCaml value
+received as argument or used as a temporary paramter, using
+the efficient `CAMLparam`, `CAMLlocal`, `CAMLreturn` macros.
+
+Boxroots suggest a "caller-root" approach where callers would
+package their OCaml values in boxroots, whose ownership is
+passed to the callee. Creating boxroots is slower than
+registering local roots, but the caller-root discipline can
+avoid re-rooting each value when moving up and down the call
+chain, so it should have a performance advantage for deep call
+chains.
+
+This benchmark performs a (recursive) fixpoint computation on
+OCaml floating-point value from C, with a parameter N that
+decides the number of fixpoint iterations necessary, and thus
+the length of the C-side call chain.
+
+The local-roots version is as follows:
+
+```c
+value local_fixpoint(value f, value x) {
+  CAMLparam2(f, x);
+  CAMLlocal1(y);
+  y = caml_callback(f,x);
+  if (Double_val(x) == Double_val(y)) {
+    CAMLreturn(y);
+  } else {
+    CAMLreturn(local_fixpoint(f, y));
+  }
+}
+```
+
+The boxroot version is as follows:
+
+```c
+value boxroot_fixpoint(value f, value x) {
+  boxroot y = boxroot_fixpoint_rooted(BOX(f), BOX(x));
+  value v = GET(y);
+  DROP(y);
+  return v;
+}
+
+#define BOX(v) boxroot_create(v)
+#define GET(b) boxroot_get(b)
+#define DROP(b) boxroot_delete(b)
+
+boxroot boxroot_fixpoint_rooted(boxroot f, boxroot x) {
+  boxroot y = BOX(caml_callback(GET(f), GET(x)));
+  if (Double_val(GET(x)) == Double_val(GET(y))) {
+    DROP(f);
+    DROP(x);
+    return y;
+  } else {
+    DROP(x);
+    return boxroot_fixpoint_rooted(f, y);
+  }
+}
+```
+
+The work is done by `boxroot_fixpoint_rooted`, but we need
+a `boxroot_fixpoint` wrapper to go from the callee-roots
+convention expected by OCaml `external` declarations to
+a caller-root convention. (This wrapper also adds some
+overhead for small call depths.)
+
+Remark: we iterate this computation C/N times, so the total
+running times remain small for different values of N. It does
+not make sense to compare times for different values of N.
+
+```
+Benchmark: local_roots
+---
+local_roots(ROOT=local  , N=1): 1.40s
+---
+local_roots(ROOT=boxroot, N=1): 3.14s
+---
+local_roots(ROOT=local  , N=2): 1.40s
+---
+local_roots(ROOT=boxroot, N=2): 2.45s
+---
+local_roots(ROOT=local  , N=5): 1.40s
+---
+local_roots(ROOT=boxroot, N=5): 1.98s
+---
+local_roots(ROOT=local  , N=10): 1.51s
+---
+local_roots(ROOT=boxroot, N=10): 1.92s
+---
+local_roots(ROOT=local  , N=100): 1.97s
+---
+local_roots(ROOT=boxroot, N=100): 1.76s
+---
+local_roots(ROOT=local  , N=1000): 2.29s
+---
+local_roots(ROOT=boxroot, N=1000): 1.62s
+```
+
+We see that, for a call depth of 1, the boxroot version is
+about twice slower than the local-roots version. This is
+a good result: the amount of computation is very small, so we
+expect a large overhead for boxroot over local roots.
+
+The performance advantage of local roots over boxroots
+disappears somewhere between N=10 and N=100.
+
+Our conclusions:
+- Using boxroots instead of local roots everywhere is
+  *possible* --- not a performance disaster.
+- It could be beneficial when traversing large OCaml
+  structures from a foreign language, with many function calls.
+
 
 ## Implementation
 

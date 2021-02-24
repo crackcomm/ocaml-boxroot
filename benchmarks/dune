@@ -18,3 +18,13 @@
   (foreign_archives ../boxroot/boxroot)
   (modules globroots)
 )
+
+(executable
+  (name local_roots)
+  (foreign_archives ../boxroot/boxroot)
+  (foreign_stubs (language c)
+    (names local_roots_stubs)
+    (include_dirs ../boxroot)
+  )
+  (modules local_roots)
+)
