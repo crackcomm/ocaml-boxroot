@@ -83,6 +83,32 @@ value is registered as a GC root.
 
 This benchmark creates a lot of roots alive at the same time.
 
+```
+$ make run-perm_count
+Benchmark: perm_count
+---
+ocaml: 3.51s
+count: 3628800
+---
+gc: 3.53s
+count: 3628800
+---
+boxroot: 3.46s
+count: 3628800
+---
+global: 43.94s
+count: 3628800
+---
+generational: 8.28s
+count: 3628800
+```
+
+We see that global roots add a large overhead, which is reduced by
+using generational global roots. Boxroots outperform generational
+global roots, and are competitive with the reference implementations
+that do not use roots (ocaml and gc).
+
+
 ### Synthetic benchmark
 
 In this benchmark, we allocate and deallocate values and roots
@@ -106,33 +132,8 @@ These settings favour the creation of a lot of roots, most of which
 are short-lived. Roots that survive are few, but they are very
 long-lived.
 
-### Globroot benchmark
-
-This benchmark is adapted from the OCaml testsuite. It exercises the
-case where there are about 1024 concurrently-live roots, but only a
-couple of young roots are created between two minor collections.
-
-### Some numbers on one of our machine
-
 ```
-$ make run
-Benchmark: perm_count
----
-ocaml: 3.51s
-count: 3628800
----
-gc: 3.53s
-count: 3628800
----
-boxroot: 3.46s
-count: 3628800
----
-global: 43.94s
-count: 3628800
----
-generational: 8.28s
-count: 3628800
----
+$ make run-synthetic
 Benchmark: synthetic
 ---
 ocaml: 16.54s
@@ -144,7 +145,33 @@ boxroot: 14.53s
 global: 39.90s
 ---
 generational: 24.60s
----
+```
+
+Since the boxroot is directly inside a gc-allocated value, our
+benchmarks leave few opportunities for the version using boxroots
+outperforming the versions without roots. The repeatable
+outperformance of non-roots versions by the boxroot version
+in this benchmark  could be explained by the greater cache locality
+during scanning.
+
+
+### Globroot benchmark
+
+This benchmark is adapted from the OCaml testsuite. It exercises the
+case where there are about 1024 concurrently-live roots, but only a
+couple of young roots are created between two minor collections.
+
+This benchmark tests the case where there are few
+concurrently-live roots and little root creation and
+modification between two collections. This corresponds to
+a common scenario where the FFI is rarely used, except that
+this benchmark does not perform any OCaml computations or
+allocations (it forces collections to occur very often despite
+low GC work), so the cost of root handling is magnified, it
+would normally be amortized by OCaml computations.
+
+```
+$ make run-globroots
 Benchmark: globroots
 ---
 API: ocaml
@@ -161,30 +188,15 @@ time: 2.19s
 ---
 API: generational
 time: 2.14s
----
 ```
 
-We see that global roots add a large overhead, which is reduced by
-using generational global roots. Boxroots outperform generational
-global roots, and are competitive with the reference implementations
-that do not use roots (ocaml and gc).
-
-Since the boxroot is directly inside a gc-allocated value, our
-benchmarks leave few opportunities for the version using boxroots
-outperforming the versions without roots. The repeatable
-outperformance of non-roots versions by the boxroot version in the
-second case could be explained by the greater cache locality during
-scanning.
-
-The `globroot` benchmark tests the case where there are few
-concurrently-live roots and little root creation and modification
-between two collections. In this benchmark, there are about 67000
-minor collections and 40000 major collections. Skiplist-based
-implementations perform well, whereas boxroot is the slowest.
-`boxroot` has to scan a complete memory pool at every minor collection
-even if there are only a few young roots, for a pool size currently
-chosen large (16KB). In this benchmark, the constant overhead is about
-10µs per minor collection.
+In this benchmark, there are about 67000 minor collections and
+40000 major collections. Skiplist-based implementations
+perform well, whereas boxroot is the slowest. `boxroot` has
+to scan a complete memory pool at every minor collection even
+if there are only a few young roots, for a pool size currently
+chosen large (16KB). In this benchmark, the constant overhead
+is about 10µs per minor collection.
 
 ## Implementation
 
