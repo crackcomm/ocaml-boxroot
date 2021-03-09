@@ -1,30 +1,4 @@
-use std::io::{BufRead, Write};
-
-const CC_LIB_PREFIX: &str = "NATIVECCLIBS=";
-
-fn cc_libs(ocaml_path: &str) -> std::io::Result<Vec<String>> {
-    let path = format!("{}/Makefile.config", ocaml_path);
-    let f = std::io::BufReader::new(std::fs::File::open(path)?);
-
-    for line in f.lines() {
-        if let Ok(line) = line {
-            if line.starts_with(CC_LIB_PREFIX) {
-                let line: Vec<_> = line.split("=").collect();
-                let line = line[1].split(" ");
-                return Ok(line
-                    .filter_map(|x| {
-                        if x == "" {
-                            None
-                        } else {
-                            Some(x.replace("-l", ""))
-                        }
-                    })
-                    .collect());
-            }
-        }
-    }
-    Ok(vec![])
-}
+use std::io::Write;
 
 fn build_boxroot(ocaml_path: &str) {
     let mut config = cc::Build::new();
@@ -36,11 +10,7 @@ fn build_boxroot(ocaml_path: &str) {
     config.compile("libocaml-boxroot.a");
 }
 
-fn link_runtime(
-    out_dir: std::path::PathBuf,
-    ocamlopt: String,
-    ocaml_path: &str,
-) -> std::io::Result<()> {
+fn link_runtime(out_dir: std::path::PathBuf, ocamlopt: String) -> std::io::Result<()> {
     let mut f = std::fs::File::create(out_dir.join("runtime.ml")).unwrap();
     write!(f, "")?;
 
@@ -59,7 +29,22 @@ fn link_runtime(
         .status()?
         .success());
 
-    for lib in cc_libs(ocaml_path)? {
+    let cc_libs: Vec<String> = std::str::from_utf8(
+        std::process::Command::new(&ocamlopt)
+            .args(&["-config-var", "native_c_libraries"])
+            .output()
+            .unwrap()
+            .stdout
+            .as_ref(),
+    )
+    .unwrap()
+    .trim()
+    .to_owned()
+    .split(' ')
+    .map(|s| s.replace("-l", ""))
+    .collect();
+
+    for lib in cc_libs {
         println!("cargo:rustc-link-lib={}", lib);
     }
 
@@ -107,6 +92,6 @@ fn main() {
     if cfg!(feature = "link-ocaml-runtime") {
         let bin_path = format!("{}/../../bin/ocamlopt", ocaml_path);
 
-        link_runtime(out_dir, bin_path, &ocaml_path).unwrap();
+        link_runtime(out_dir, bin_path).unwrap();
     }
 }
