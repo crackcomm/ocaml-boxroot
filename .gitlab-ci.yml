@@ -16,3 +16,19 @@ build:
   script:
     - make all
     - make run | tee bench-log.txt
+
+build-crate:
+  stage: build
+
+  before_script:
+    - sudo apk add --no-cache ca-certificates gcc
+    - export RUST_VERSION=1.50.0
+    - wget "https://static.rust-lang.org/rustup/archive/1.23.1/x86_64-unknown-linux-musl/rustup-init"
+    - chmod +x rustup-init
+    - ./rustup-init -y --no-modify-path --profile minimal --default-toolchain $RUST_VERSION --default-host x86_64-unknown-linux-musl
+    - source $HOME/.cargo/env
+    - cd rust/ocaml-boxroot-sys
+
+  script:
+    - cargo build --features "link-ocaml-runtime" --verbose
+    - cargo test --features "link-ocaml-runtime" --verbose
