@@ -3,6 +3,11 @@ name = "ocaml-boxroot-sys"
 version = "0.1.0"
 authors = ["Bruno Deferrari <utizoc@gmail.com>"]
 edition = "2018"
+license = "MIT"
+description = "Bindings for ocaml-boxroot"
+homepage = "https://gitlab.com/ocaml-rust/ocaml-boxroot"
+repository = "https://gitlab.com/ocaml-rust/ocaml-boxroot"
+keywords = ["ocaml", "rust", "ffi"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
