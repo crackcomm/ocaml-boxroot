@@ -4,8 +4,8 @@ fn build_boxroot(ocaml_path: &str) {
     let mut config = cc::Build::new();
 
     config.include(ocaml_path);
-    config.include("../../boxroot/");
-    config.file("../../boxroot/boxroot.c");
+    config.include("vendor/boxroot/");
+    config.file("vendor/boxroot/boxroot.c");
 
     config.compile("libocaml-boxroot.a");
 }
@@ -55,7 +55,8 @@ fn link_runtime(out_dir: std::path::PathBuf, ocamlopt: String) -> std::io::Resul
 }
 
 fn main() {
-    println!("cargo:rerun-if-changed=../../boxroot/");
+    println!("cargo:rerun-if-changed=vendor/boxroot/boxroot.c");
+    println!("cargo:rerun-if-changed=vendor/boxroot/boxroot.h");
     println!("cargo:rerun-if-env-changed=OCAMLOPT");
     println!("cargo:rerun-if-env-changed=OCAML_WHERE_PATH");
 

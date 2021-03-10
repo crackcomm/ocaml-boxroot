@@ -8,6 +8,7 @@ description = "Bindings for ocaml-boxroot"
 homepage = "https://gitlab.com/ocaml-rust/ocaml-boxroot"
 repository = "https://gitlab.com/ocaml-rust/ocaml-boxroot"
 keywords = ["ocaml", "rust", "ffi"]
+include = ["build.rs", "src/*.rs", "vendor/boxroot/boxroot.c", "vendor/boxroot/boxroot.h", "README.md"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
