@@ -1,4 +1,3 @@
-use std::io::Write;
 
 fn build_boxroot(ocaml_path: &str) {
     let mut config = cc::Build::new();
@@ -10,22 +9,25 @@ fn build_boxroot(ocaml_path: &str) {
     config.compile("libocaml-boxroot.a");
 }
 
-fn link_runtime(out_dir: std::path::PathBuf, ocamlopt: String) -> std::io::Result<()> {
-    let mut f = std::fs::File::create(out_dir.join("runtime.ml")).unwrap();
+#[cfg(feature = "link-ocaml-runtime-and-dummy-program")]
+fn link_runtime(out_dir: std::path::PathBuf, ocamlopt: &str, ocaml_path: &str) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let mut f = std::fs::File::create(out_dir.join("empty.ml")).unwrap();
     write!(f, "")?;
 
     assert!(std::process::Command::new(&ocamlopt)
-        .args(&["-output-complete-obj", "-o"])
-        .arg(out_dir.join("rt.o"))
-        .arg(out_dir.join("runtime.ml"))
+        .args(&["-output-obj", "-o"])
+        .arg(out_dir.join("dummy.o"))
+        .arg(out_dir.join("empty.ml"))
         .status()?
         .success());
 
     let ar = std::env::var("AR").unwrap_or_else(|_| "ar".to_string());
     assert!(std::process::Command::new(&ar)
         .arg("rcs")
-        .arg(out_dir.join("libruntime.a"))
-        .arg(out_dir.join("rt.o"))
+        .arg(out_dir.join("libdummy.a"))
+        .arg(out_dir.join("dummy.o"))
         .status()?
         .success());
 
@@ -49,7 +51,10 @@ fn link_runtime(out_dir: std::path::PathBuf, ocamlopt: String) -> std::io::Resul
     }
 
     println!("cargo:rustc-link-search={}", out_dir.display());
-    println!("cargo:rustc-link-lib=static=runtime");
+    println!("cargo:rustc-link-lib=static=dummy");
+
+    println!("cargo:rustc-link-search={}", ocaml_path);
+    println!("cargo:rustc-link-lib=dylib=asmrun");
 
     Ok(())
 }
@@ -90,9 +95,6 @@ fn main() {
     println!("cargo:rustc-link-search={}", out_dir.display());
     println!("cargo:rustc-link-lib=static=ocaml-boxroot");
 
-    if cfg!(feature = "link-ocaml-runtime") {
-        let bin_path = format!("{}/../../bin/ocamlopt", ocaml_path);
-
-        link_runtime(out_dir, bin_path).unwrap();
-    }
+    #[cfg(feature = "link-ocaml-runtime-and-dummy-program")]
+    link_runtime(out_dir, &ocamlopt, &ocaml_path).unwrap();
 }

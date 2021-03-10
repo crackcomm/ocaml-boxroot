@@ -30,5 +30,5 @@ build-crate:
     - cd rust/ocaml-boxroot-sys
 
   script:
-    - cargo build --features "link-ocaml-runtime" --verbose
-    - cargo test --features "link-ocaml-runtime" --verbose
+    - cargo build --features "link-ocaml-runtime-and-dummy-program" --verbose
+    - cargo test --features "link-ocaml-runtime-and-dummy-program" --verbose

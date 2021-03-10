@@ -12,7 +12,7 @@ extern "C" {
 }
 
 // Just a test to verify that it compiles and links right
-// Run with: cargo test --features "link-ocaml-runtime"
+// Run with: cargo test --features "link-ocaml-runtime-and-dummy-program"
 #[cfg(test)]
 mod tests {
     use crate::{
