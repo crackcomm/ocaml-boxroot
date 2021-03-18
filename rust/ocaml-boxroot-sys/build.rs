@@ -1,3 +1,4 @@
+use std::{fs, io, path::Path};
 
 fn build_boxroot(ocaml_path: &str) {
     let mut config = cc::Build::new();
@@ -10,7 +11,11 @@ fn build_boxroot(ocaml_path: &str) {
 }
 
 #[cfg(feature = "link-ocaml-runtime-and-dummy-program")]
-fn link_runtime(out_dir: std::path::PathBuf, ocamlopt: &str, ocaml_path: &str) -> std::io::Result<()> {
+fn link_runtime(
+    out_dir: std::path::PathBuf,
+    ocamlopt: &str,
+    ocaml_path: &str,
+) -> std::io::Result<()> {
     use std::io::Write;
 
     let mut f = std::fs::File::create(out_dir.join("empty.ml")).unwrap();
@@ -59,6 +64,20 @@ fn link_runtime(out_dir: std::path::PathBuf, ocamlopt: &str, ocaml_path: &str) -
     Ok(())
 }
 
+fn copy_dir_recursively(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> io::Result<()> {
+    fs::create_dir_all(&dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        if ty.is_dir() {
+            copy_dir_recursively(entry.path(), dst.as_ref().join(entry.file_name()))?;
+        } else {
+            fs::copy(entry.path(), dst.as_ref().join(entry.file_name()))?;
+        }
+    }
+    Ok(())
+}
+
 fn main() {
     println!("cargo:rerun-if-changed=vendor/boxroot/boxroot.c");
     println!("cargo:rerun-if-changed=vendor/boxroot/boxroot.h");
@@ -76,17 +95,24 @@ fn main() {
             ocaml_path = path;
         }
         _ => {
-            ocaml_path = std::str::from_utf8(
-                std::process::Command::new(&ocamlopt)
-                    .arg("-where")
-                    .output()
-                    .unwrap()
-                    .stdout
-                    .as_ref(),
-            )
-            .unwrap()
-            .trim()
-            .to_owned();
+            if cfg!(feature = "without-ocamlopt") {
+                // Copy header files with the minimum necessary for compiling boxroot
+                let caml_includes_path = out_dir.join("caml");
+                copy_dir_recursively("utils/without-ocamlopt/caml", caml_includes_path).unwrap();
+                ocaml_path = out_dir.to_string_lossy().to_string();
+            } else {
+                ocaml_path = std::str::from_utf8(
+                    std::process::Command::new(&ocamlopt)
+                        .arg("-where")
+                        .output()
+                        .unwrap()
+                        .stdout
+                        .as_ref(),
+                )
+                .unwrap()
+                .trim()
+                .to_owned();
+            }
         }
     }
 
