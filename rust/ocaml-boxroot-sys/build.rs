@@ -1,5 +1,3 @@
-use std::{fs, io, path::Path};
-
 fn build_boxroot(ocaml_path: &str) {
     let mut config = cc::Build::new();
 
@@ -64,20 +62,6 @@ fn link_runtime(
     Ok(())
 }
 
-fn copy_dir_recursively(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> io::Result<()> {
-    fs::create_dir_all(&dst)?;
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        let ty = entry.file_type()?;
-        if ty.is_dir() {
-            copy_dir_recursively(entry.path(), dst.as_ref().join(entry.file_name()))?;
-        } else {
-            fs::copy(entry.path(), dst.as_ref().join(entry.file_name()))?;
-        }
-    }
-    Ok(())
-}
-
 fn main() {
     println!("cargo:rerun-if-changed=vendor/boxroot/boxroot.c");
     println!("cargo:rerun-if-changed=vendor/boxroot/boxroot.h");
@@ -96,10 +80,8 @@ fn main() {
         }
         _ => {
             if cfg!(feature = "without-ocamlopt") {
-                // Copy header files with the minimum necessary for compiling boxroot
-                let caml_includes_path = out_dir.join("caml");
-                copy_dir_recursively("utils/without-ocamlopt/caml", caml_includes_path).unwrap();
-                ocaml_path = out_dir.to_string_lossy().to_string();
+                // Use dummy include files in this case
+                ocaml_path = "utils/without-ocamlopt".to_owned();
             } else {
                 ocaml_path = std::str::from_utf8(
                     std::process::Command::new(&ocamlopt)
