@@ -1,4 +1,3 @@
-
 fn build_boxroot(ocaml_path: &str) {
     let mut config = cc::Build::new();
 
@@ -10,7 +9,11 @@ fn build_boxroot(ocaml_path: &str) {
 }
 
 #[cfg(feature = "link-ocaml-runtime-and-dummy-program")]
-fn link_runtime(out_dir: std::path::PathBuf, ocamlopt: &str, ocaml_path: &str) -> std::io::Result<()> {
+fn link_runtime(
+    out_dir: std::path::PathBuf,
+    ocamlopt: &str,
+    ocaml_path: &str,
+) -> std::io::Result<()> {
     use std::io::Write;
 
     let mut f = std::fs::File::create(out_dir.join("empty.ml")).unwrap();
@@ -76,17 +79,22 @@ fn main() {
             ocaml_path = path;
         }
         _ => {
-            ocaml_path = std::str::from_utf8(
-                std::process::Command::new(&ocamlopt)
-                    .arg("-where")
-                    .output()
-                    .unwrap()
-                    .stdout
-                    .as_ref(),
-            )
-            .unwrap()
-            .trim()
-            .to_owned();
+            if cfg!(feature = "without-ocamlopt") {
+                // Use dummy include files in this case
+                ocaml_path = "utils/without-ocamlopt".to_owned();
+            } else {
+                ocaml_path = std::str::from_utf8(
+                    std::process::Command::new(&ocamlopt)
+                        .arg("-where")
+                        .output()
+                        .unwrap()
+                        .stdout
+                        .as_ref(),
+                )
+                .unwrap()
+                .trim()
+                .to_owned();
+            }
         }
     }
 
