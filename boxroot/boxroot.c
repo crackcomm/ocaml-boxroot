@@ -5,6 +5,9 @@
 #include <assert.h>
 #include <errno.h>
 #include <limits.h>
+#if defined(ENABLE_BOXROOT_MUTEX) && (ENABLE_BOXROOT_MUTEX == 1)
+#include <pthread.h>
+#endif
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -165,6 +168,15 @@ static const class global_ring_classes[] =
       action;                                                           \
     }                                                                   \
   } while (0)
+
+#if defined(ENABLE_BOXROOT_MUTEX) && (ENABLE_BOXROOT_MUTEX == 1)
+static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+#define CRITICAL_SECTION_BEGIN() pthread_mutex_lock(&mutex)
+#define CRITICAL_SECTION_END() pthread_mutex_unlock(&mutex)
+#else
+#define CRITICAL_SECTION_BEGIN()
+#define CRITICAL_SECTION_END()
+#endif
 
 struct stats {
   int minor_collections;
@@ -693,8 +705,11 @@ static inline boxroot root_create_classified(value init, int for_young_block)
 // hot path
 boxroot boxroot_create(value init)
 {
+  CRITICAL_SECTION_BEGIN();
   if (DEBUG) ++stats.total_create;
-  return root_create_classified(init, is_young_block(init));
+  boxroot br = root_create_classified(init, is_young_block(init));
+  CRITICAL_SECTION_END();
+  return br;
 }
 
 value boxroot_get(boxroot root)
@@ -710,10 +725,12 @@ value const * boxroot_get_ref(boxroot root)
 // hot path
 void boxroot_delete(boxroot root)
 {
+  CRITICAL_SECTION_BEGIN();
   slot *s = (slot *)root;
   CAMLassert(s);
   if (DEBUG) ++stats.total_delete;
   free_slot(s, get_pool_header(s));
+  CRITICAL_SECTION_END();
 }
 
 static void boxroot_reallocate(boxroot *root, pool *p, value new_value)
@@ -733,6 +750,7 @@ static void boxroot_reallocate(boxroot *root, pool *p, value new_value)
 // hot path
 void boxroot_modify(boxroot *root, value new_value)
 {
+  CRITICAL_SECTION_BEGIN();
   slot *s = (slot *)*root;
   CAMLassert(s);
   if (DEBUG) ++stats.total_modify;
@@ -741,11 +759,12 @@ void boxroot_modify(boxroot *root, value new_value)
   if (LIKELY(!is_new_young_block
              || (p = get_pool_header(s))->hd.class == YOUNG)) {
     *(value *)s = new_value;
-    return;
+  } else {
+    // We need to reallocate, but this reallocation happens at most once
+    // between two minor collections.
+    boxroot_reallocate(root, p, new_value);
   }
-  // We need to reallocate, but this reallocation happens at most once
-  // between two minor collections.
-  boxroot_reallocate(root, p, new_value);
+  CRITICAL_SECTION_END();
 }
 
 /* }}} */
@@ -1004,6 +1023,7 @@ static void scanning_callback(scanning_action action)
   // is also used for other the statistics of other implementations,
   // we further make sure of this with an extra test, by avoiding
   // calling scan_roots if it has only just been initialised.
+  CRITICAL_SECTION_BEGIN();
   if (boxroot_used()) {
     int64_t start = time_counter();
     scan_roots(action);
@@ -1013,6 +1033,7 @@ static void scanning_callback(scanning_action action)
     *total += duration;
     if (duration > *peak) *peak = duration;
   }
+  CRITICAL_SECTION_END();
 }
 
 static caml_timing_hook prev_minor_begin_hook = NULL;
@@ -1035,6 +1056,7 @@ static int setup = 0;
 // Must be called to set the hook
 int boxroot_setup()
 {
+  CRITICAL_SECTION_BEGIN();
   if (setup) return 0;
   // initialise globals
   in_minor_collection = 0;
@@ -1051,11 +1073,13 @@ int boxroot_setup()
   caml_minor_gc_end_hook = record_minor_end;
   // we are done
   setup = 1;
+  CRITICAL_SECTION_END();
   return 1;
 }
 
 void boxroot_teardown()
 {
+  CRITICAL_SECTION_BEGIN();
   if (!setup) return;
   // restore callbacks
   caml_scan_roots_hook = prev_scan_roots_hook;
@@ -1063,6 +1087,7 @@ void boxroot_teardown()
   caml_minor_gc_end_hook = prev_minor_end_hook;
   free_all_chunks();
   setup = 0;
+  CRITICAL_SECTION_END();
 }
 
 /* }}} */
