@@ -7,5 +7,5 @@
     global
     generational
   ))
-  (foreign_archives ../../boxroot/boxroot)
+  (libraries boxroot)
 )
