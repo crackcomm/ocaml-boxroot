@@ -310,6 +310,11 @@ static inline slot empty_free_list(pool *p) {
   return (slot)p;
 }
 
+static inline int is_full_pool(pool *p)
+{
+  return is_empty_free_list(p->hd.free_list, p);
+}
+
 static pool * get_empty_pool()
 {
   ++stats.live_pools;
@@ -359,7 +364,7 @@ static void free_all_pools()
 static pool * find_available_pool(int for_young)
 {
   pool **target = for_young ? &pools.young_available : &pools.old_available;
-  if (*target != NULL && !is_empty_free_list((*target)->hd.free_list, *target)) {
+  if (*target != NULL && !is_full_pool(*target)) {
     return *target;
   }
   pool *new_pool = NULL;
@@ -570,7 +575,7 @@ static slot * alloc_slot_slow(int for_young_block)
   }
   pool *p = find_available_pool(for_young_block);
   if (p == NULL) return NULL;
-  assert(!is_empty_free_list( p->hd.free_list, p));
+  assert(!is_full_pool(p));
   assert(for_young_block == (p->hd.class == YOUNG));
   return alloc_slot(for_young_block);
 }
