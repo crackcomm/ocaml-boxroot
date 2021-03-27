@@ -1,15 +1,10 @@
 # Entry points
 
-BENCHMARKS = $(addprefix benchmarks/,\
-  perm_count.exe \
-  synthetic.exe \
-  globroots.exe \
-)
-
 .PHONY: entry
 entry:
 	@echo "make all: build all benchmarks"
-	@echo "make run: run all benchmarks"
+	@echo "make run: run all benchmarks (important tests only)"
+	@echo "make run-more: run all benchmarks (more tests)"
 	@echo "make run-perm_count: run the 'perm_count' benchmark"
 	@echo "make run-synthetic: run the 'synthetic' benchmark"
 	@echo "make run-globroots: run the 'globroots' benchmark"
@@ -20,14 +15,17 @@ entry:
 all:
 	dune build @all
 
+.PHONY: clean
 clean:
 	dune clean
 
 EMPTY=
 REF_IMPLS=\
-  ocaml \
   gc \
   boxroot \
+  $(EMPTY)
+REF_IMPLS_GLOBAL=\
+  ocaml \
   global \
   generational \
   $(EMPTY)
@@ -35,7 +33,7 @@ REF_IMPLS=\
 run_bench = \
   echo "Benchmark: $(1)" \
   && echo "---" \
-  $(foreach REF, $(REF_IMPLS), \
+  $(foreach REF, $(REF_IMPLS) $(if $(TEST_MORE),$(REF_IMPLS_GLOBAL),), \
     && (REF=$(REF) $(2); echo "---") \
   )
 
@@ -60,6 +58,13 @@ run-synthetic: all
 
 .PHONY: run-globroots
 run-globroots: all
+	$(MAKE) run-globroots-all TEST_MORE=1
+# Globroots has the unusual behavior that global-root implementations
+# are fast, faster than boxroot. We always want to  see their results,
+# so we add an indirection to set TEST_MORE=1.
+
+.PHONY: run-globroots-all
+run-globroots-all: all
 	$(call run_bench,"globroots", \
 	  N=500_000 dune exec ./benchmarks/globroots.exe)
 
@@ -68,7 +73,7 @@ run-local_roots: all
 	echo "Benchmark: local_roots" \
 	&& echo "---" \
 	$(foreach N, 1 2 5 10 100 1000, \
-	  $(foreach ROOT, local boxroot generational, \
+	  $(foreach ROOT, local boxroot $(if $(TEST_MORE),generational,), \
 	    && (N=$(N) ROOT=$(ROOT) dune exec ./benchmarks/local_roots.exe) \
 	  ) && echo "---")
 
@@ -78,6 +83,10 @@ run:
 	$(MAKE) run-synthetic
 	$(MAKE) run-globroots
 	$(MAKE) run-local_roots
+
+.PHONY: run-more
+run-more:
+	$(MAKE) run TEST_MORE=1
 
 .PHONY: test-boxroot
 test-boxroot: all
