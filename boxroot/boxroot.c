@@ -281,10 +281,10 @@ static pool * ring_pop(pool **target)
   assert(front);
   if (front->hd.next == front) {
     *target = NULL;
-    return front;
+  } else {
+    *target = front->hd.next;
+    ring_link(front->hd.prev, front->hd.next);
   }
-  ring_link(front->hd.prev, front->hd.next);
-  *target = front->hd.next;
   ring_link(front, front);
   return front;
 }
