@@ -1,12 +1,19 @@
 (library
   (name ref)
-  (foreign_archives ../../boxroot/boxroot)
+  (foreign_archives
+     ../../boxroot/boxroot
+     ../../dll_boxroot/dll_boxroot
+  )
   (foreign_stubs (language c)
-    (extra_deps ../../boxroot/boxroot.h)
+    (extra_deps
+      ../../boxroot/boxroot.h
+      ../../dll_boxroot/dll_boxroot.h
+    )
     (names
       abstract_out_of_heap
       gc
       boxroot
+      dll_boxroot
       global
       generational
     )

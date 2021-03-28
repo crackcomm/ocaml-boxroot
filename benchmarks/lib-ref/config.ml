@@ -4,6 +4,10 @@ module type Ref = sig
   val get : 'a t -> 'a
   val modify : 'a t -> 'a -> unit
   val delete : 'a t -> unit
+
+  val setup : unit -> unit
+  val teardown : unit -> unit
+  val print_stats : unit -> unit
 end
 
 let choose_implem var implementations =
@@ -25,6 +29,7 @@ let implementations : (string * (module Ref)) list = [
   "global", (module Global_ref);
   "generational", (module Generational_ref);
   "boxroot", (module Boxroot_ref);
+  "dll-boxroot", (module Dll_boxroot_ref);
   "gc", (module Gc_ref);
   "ocaml", (module Ocaml_ref);
 ]
@@ -32,15 +37,15 @@ let implementations : (string * (module Ref)) list = [
 let implem_name, implem_module =
   choose_implem "REF" implementations
 
-let () =
+let show_stats =
   match Sys.getenv "STATS" with
-  | exception _ -> ()
-  | "1" | "true" | "yes" -> Boxroot_ref.show_stats := true
-  | "0" | "false" | "no" -> Boxroot_ref.show_stats := false
+  | exception _ -> false
+  | "1" | "true" | "yes" -> true
+  | "0" | "false" | "no" -> false
   | other ->
     Printf.eprintf "Unknown value %S for the environment variable STATS.\n\
-                    Expected 'true' or 'false'.\n%!"
-      other
+                    Expected 'true' or 'false'.\n%!" other;
+    false
 
 module Ref = struct
   include (val implem_module : Ref)

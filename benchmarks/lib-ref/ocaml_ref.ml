@@ -13,3 +13,7 @@ let get r = r.contents
 let modify r v = r.contents <- v
 
 let delete r = r.contents <- Obj.magic ()
+
+let setup () = ()
+let teardown () = ()
+let print_stats () = ()

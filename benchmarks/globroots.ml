@@ -59,7 +59,11 @@ let n =
     Printf.ksprintf failwith "We expected an environment variable N with an integer value."
 
 let _ =
-  Printf.printf "API: %s\n%!" Ref.Config.implem_name;
+  Ref.Config.Ref.setup ();
+  Printf.printf "%s: %!" Ref.Config.implem_name;
   let module Test = MakeTest(Ref.Config.Ref) in
   Test.test n;
-  Printf.printf "time: %.2fs\n%!" (Sys.time ())
+  Printf.printf "%.2fs\n%!" (Sys.time ());
+  if Ref.Config.show_stats then
+    Ref.Config.Ref.print_stats ();
+  Ref.Config.Ref.teardown ();

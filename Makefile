@@ -28,16 +28,17 @@ REF_IMPLS=\
   gc \
   boxroot \
   $(EMPTY)
-REF_IMPLS_GLOBAL=\
+REF_IMPLS_MORE=\
   ocaml \
-  global \
+  dll-boxroot \
   generational \
+  global \
   $(EMPTY)
 
 run_bench = \
   echo "Benchmark: $(1)" \
   && echo "---" \
-  $(foreach REF, $(REF_IMPLS) $(if $(TEST_MORE),$(REF_IMPLS_GLOBAL),), \
+  $(foreach REF, $(REF_IMPLS) $(if $(TEST_MORE),$(REF_IMPLS_MORE),), \
     && (REF=$(REF) $(2); echo "---") \
   )
 
@@ -77,7 +78,7 @@ run-local_roots: all
 	echo "Benchmark: local_roots" \
 	&& echo "---" \
 	$(foreach N, 1 2 $(if $(TEST_MORE),3 4,) 5 10 100 1000, \
-	  $(foreach ROOT, local boxroot $(if $(TEST_MORE),generational,), \
+	  $(foreach ROOT, local boxroot $(if $(TEST_MORE), dll_boxroot generational,), \
 	    && (N=$(N) ROOT=$(ROOT) dune exec ./benchmarks/local_roots.exe) \
 	  ) && echo "---")
 

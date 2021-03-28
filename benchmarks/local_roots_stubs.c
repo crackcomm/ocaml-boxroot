@@ -94,7 +94,6 @@ value caml_boxroot_stats(value unit)
   return unit;
 }
 
-
 /* This is a variation of the caller-root example using "fake
    boxroots", namely malloced blocks containing generational global
    roots. This should be sensibly slower than boxroot, we are using it
@@ -144,4 +143,55 @@ value generational_fixpoint(value f, value x)
   value v = GEN_GET(y);
   GEN_DROP(y);
   return v;
+}
+
+
+/* same as the 'boxroot' version, but using 'dll_boxroot' instead */
+#include "../dll_boxroot/dll_boxroot.h"
+
+#undef BOX
+#undef GET
+#undef DROP
+#define BOX(v) dll_boxroot_create(v)
+#define GET(b) dll_boxroot_get(b)
+#define DROP(b) dll_boxroot_delete(b)
+
+dll_boxroot dll_boxroot_fixpoint_rooted(dll_boxroot f, dll_boxroot x) {
+  dll_boxroot y = BOX(caml_callback(GET(f), GET(x)));
+  if (Double_val(GET(x)) == Double_val(GET(y))) {
+    DROP(f);
+    DROP(x);
+    return y;
+  } else {
+    DROP(x);
+    return dll_boxroot_fixpoint_rooted(f, y);
+  }
+}
+
+value dll_boxroot_fixpoint(value f, value x) {
+  dll_boxroot y = dll_boxroot_fixpoint_rooted(BOX(f), BOX(x));
+  value v = GET(y);
+  DROP(y);
+  return v;
+}
+
+value caml_dll_boxroot_setup(value unit)
+{
+  if (!dll_boxroot_setup()) caml_failwith("dll_boxroot_scan_hook_setup");
+  return unit;
+}
+
+value caml_dll_boxroot_teardown(value unit)
+{
+  dll_boxroot_teardown();
+  return unit;
+}
+
+value caml_dll_boxroot_stats(value unit)
+{
+  char *old_locale = setlocale(LC_NUMERIC, NULL);
+  setlocale(LC_NUMERIC, "en_US.UTF-8");
+  dll_boxroot_print_stats();
+  setlocale(LC_NUMERIC, old_locale);
+  return unit;
 }
