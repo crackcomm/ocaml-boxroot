@@ -61,6 +61,9 @@ static struct {
 
   /* list of elements with old values */
   ring old;
+
+  /* list of empty elements */
+  ring free;
 } rings;
 
 void validate_all_rings();
@@ -160,9 +163,12 @@ void free_ring(ring ring) {
 }
 /* }}} */
 
-/* {{{ Element functions */
+/* {{{ Ring of free elements */
 
 ring create_elem() {
+  if (rings.free != NULL) {
+    return ring_pop(&rings.free);
+  }
   struct elem *elem = malloc(sizeof (struct elem));
   if (elem == NULL) {
     return NULL;
@@ -172,7 +178,8 @@ ring create_elem() {
 }
 
 void delete_elem(ring elem) {
-  free(elem);
+  elem->slot = (value)NULL;
+  ring_push_back(elem, &rings.free);
 }
 
 /* }}} */
@@ -247,10 +254,17 @@ void validate_old_ring() {
   });
 }
 
+void validate_free_ring() {
+  FOREACH_ELEM_IN_RING(elem, rings.free, {
+    assert(elem->slot == (value)NULL);
+  });
+}
+
 void validate_all_rings() {
   struct stats stats_before = stats;
   validate_young_ring();
   validate_old_ring();
+  validate_free_ring();
   stats = stats_before;
 }
 
@@ -277,6 +291,8 @@ static void scan_roots(scanning_action action)
     stats.total_scanning_work_minor += work;
   } else {
     work += scan_ring(action, rings.old);
+    free_ring(rings.free);
+    rings.free = NULL;
     stats.total_scanning_work_major += work;
   }
   if (DEBUG) validate_all_rings();
@@ -397,6 +413,7 @@ int dll_boxroot_setup()
   stats = empty_stats;
   rings.young = NULL;
   rings.old = NULL;
+  rings.free = NULL;
   // save previous callbacks
   prev_scan_roots_hook = caml_scan_roots_hook;
   prev_minor_begin_hook = caml_minor_gc_begin_hook;
@@ -422,6 +439,8 @@ void dll_boxroot_teardown()
   rings.young = NULL;
   free_ring(rings.old);
   rings.old = NULL;
+  free_ring(rings.free);
+  rings.free = NULL;
   setup = 0;
 }
 
