@@ -75,31 +75,17 @@ struct header {
   class class;
 };
 
-struct footer {
-  slot unused_padding;
-};
-
 static_assert(POOL_SIZE / sizeof(slot) <= INT_MAX, "pool size too large");
 
 #define POOL_ROOTS_CAPACITY                                 \
-  ((int)((POOL_SIZE - sizeof(struct header) - sizeof(struct footer)) / sizeof(slot)))
-/* &pool->roots[POOL_ROOTS_CAPACITY] can end up as a placeholder value
-   in the freelist to denote the last element of the freelist,
-   starting from after releasing from a full pool for the first time.
-   To ensure that this value is recognised by the test
-   [is_pool_member(v, pool)], we ensure the roots array end before the
-   pool ends. */
-
-static_assert(sizeof(struct footer) >= 1,
-  "footer must be non-empty so that the end-of-roots pointer falls inside the pool");
+  ((int)((POOL_SIZE - sizeof(struct header)) / sizeof(slot)))
 
 typedef struct pool {
   struct header hd;
-  /* Occupied slots are OCaml values. Unoccupied slots are a pointer
-     to the next slot in the free list, or to the end of the array,
-     denoting the last element of the free list. */
+  /* Occupied slots are OCaml values.
+     Unoccupied slots are a pointer to the next slot in the free list,
+     or to pool itself, denoting the empty free list. */
   slot roots[POOL_ROOTS_CAPACITY];
-  struct footer ft;
 } pool;
 
 static_assert(sizeof(pool) == POOL_SIZE, "bad pool size");
@@ -194,7 +180,7 @@ struct stats {
                        // during scanning
   long long get_pool_header; // number of times get_pool_header was called
   long long is_pool_member; // number of times is_pool_member was called
-  long long is_end_of_roots; // number of times is_end_of_roots was called
+  long long is_empty_free_list; // number of times is_empty_free_list was called
 };
 
 static struct stats stats;
@@ -220,10 +206,10 @@ static inline int is_pool_member(slot v, pool *p)
 }
 
 // hot path
-static inline int is_end_of_roots(slot *v)
+static inline int is_empty_free_list(slot *v, pool *p)
 {
-  if (DEBUG) ++stats.is_end_of_roots;
-  return ((uintptr_t)(v + 1) & (POOL_SIZE - 1)) == 0;
+  if (DEBUG) ++stats.is_empty_free_list;
+  return (v == (slot *)p);
 }
 
 // hot path
@@ -315,8 +301,13 @@ static pool * get_uninitialised_pool()
   p->hd.free_list = NULL;
   p->hd.alloc_count = 0;
   p->hd.class = UNTRACKED;
-  p->ft.unused_padding = NULL;
   return p;
+}
+
+// the empty free-list for a pool p is denoted by a pointer to the pool itself
+// (NULL could be a valid value for an element slot)
+static inline slot empty_free_list(pool *p) {
+  return (slot)p;
 }
 
 static pool * get_empty_pool()
@@ -327,15 +318,11 @@ static pool * get_empty_pool()
 
   if (out == NULL) return NULL;
 
-  slot *end = out->roots + POOL_ROOTS_CAPACITY;
-  slot *s = out->roots;
-  while (s < end) {
-    slot *next = s + 1;
-    *s = (slot)next;
-    s = next;
+  out->roots[POOL_ROOTS_CAPACITY - 1] = empty_free_list(out);
+  for (slot *s = out->roots + POOL_ROOTS_CAPACITY - 2; s >= out->roots; --s) {
+    *s = (slot)(s + 1);
   }
   out->hd.free_list = out->roots;
-
   return out;
 }
 
@@ -372,7 +359,7 @@ static void free_all_pools()
 static pool * find_available_pool(int for_young)
 {
   pool **target = for_young ? &pools.young_available : &pools.old_available;
-  if (*target != NULL && !is_end_of_roots((*target)->hd.free_list)) {
+  if (*target != NULL && !is_empty_free_list((*target)->hd.free_list, *target)) {
     return *target;
   }
   pool *new_pool = NULL;
@@ -552,7 +539,7 @@ static inline slot * alloc_slot(int for_young_block)
   pool *p = for_young_block ? pools.young_available : pools.old_available;
   if (LIKELY(p != NULL)) {
     slot *new_root = p->hd.free_list;
-    if (LIKELY(!is_end_of_roots(new_root))) {
+    if (LIKELY(!is_empty_free_list(new_root, p))) {
       p->hd.free_list = (slot *)*new_root;
       p->hd.alloc_count++;
       return new_root;
@@ -583,7 +570,7 @@ static slot * alloc_slot_slow(int for_young_block)
   }
   pool *p = find_available_pool(for_young_block);
   if (p == NULL) return NULL;
-  assert(!is_end_of_roots(p->hd.free_list));
+  assert(!is_empty_free_list( p->hd.free_list, p));
   assert(for_young_block == (p->hd.class == YOUNG));
   return alloc_slot(for_young_block);
 }
@@ -688,18 +675,15 @@ static void validate_pool(pool *pool)
     assert(pool->hd.class == UNTRACKED);
     return;
   }
-  slot *pool_end = pool->roots + POOL_ROOTS_CAPACITY;
   // check freelist structure and length
   slot *curr = pool->hd.free_list;
-  int length = 0;
-  while (curr != pool_end) {
-    length++;
-    assert(length <= POOL_ROOTS_CAPACITY);
-    assert(curr >= pool->roots && curr < pool_end);
-    slot s = *curr;
-    curr = (slot *)s;
+  int pos = 0;
+  for (; !is_empty_free_list(curr, pool); curr = (slot*)*curr, pos++)
+  {
+    assert(pos < POOL_ROOTS_CAPACITY);
+    assert(curr >= pool->roots && curr < pool->roots + POOL_ROOTS_CAPACITY);
   }
-  assert(length == POOL_ROOTS_CAPACITY - pool->hd.alloc_count);
+  assert(pos == POOL_ROOTS_CAPACITY - pool->hd.alloc_count);
   // check count of allocated elements
   int alloc_count = 0;
   for(int i = 0; i < POOL_ROOTS_CAPACITY; i++) {
@@ -897,12 +881,12 @@ void boxroot_print_stats()
          "young hits: %d%%\n"
          "get_pool_header: %'lld\n"
          "is_pool_member: %'lld\n"
-         "is_end_of_roots: %'lld\n",
+         "is_empty_free_list: %'lld\n",
          stats.is_young,
          (int)((stats.young_hit * 100) / stats.total_scanning_work_minor),
          stats.get_pool_header,
          stats.is_pool_member,
-         stats.is_end_of_roots);
+         stats.is_empty_free_list);
 #endif
 }
 
