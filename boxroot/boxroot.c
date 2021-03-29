@@ -466,13 +466,17 @@ static void try_demote_pool(pool *p)
 static pool * find_available_pool(int for_young)
 {
   pool **target = for_young ? &pools.young_available : &pools.old_available;
-  // Reclassify all full pools at the front
-  while (*target != NULL && is_full_pool(*target)) {
+  // Reclassify the first pool if it is full
+  if (*target != NULL && is_full_pool(*target)) {
       pool *full = ring_pop(target);
       assert(promotion_occupancy(full) == QUASI_FULL);
       assert(for_young == (YOUNG == full->hd.class));
       pool_reclassify(full, QUASI_FULL);
   }
+  // Note: we only ever allocate from the the first pool of each ring,
+  // so there is at most one full pool in front of the ring. We just
+  // reclassified it with the test above, so the next pool
+  // (if it exists) cannot be full.
   if (*target != NULL) {
     assert(!is_full_pool(*target));
     return *target;
