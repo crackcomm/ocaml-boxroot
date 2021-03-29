@@ -8,6 +8,7 @@ entry:
 	@echo "make run-perm_count: run the 'perm_count' benchmark"
 	@echo "make run-synthetic: run the 'synthetic' benchmark"
 	@echo "make run-globroots: run the 'globroots' benchmark"
+	@echo "make run-local_roots: run the 'local_roots' benchmark"
 	@echo "make test-boxroot: test boxroots on 'perm_count'"
 	@echo "make clean"
 
