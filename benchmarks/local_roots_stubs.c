@@ -51,9 +51,8 @@ int compare_refs(value const *x, value const *y)
 
 boxroot boxroot_fixpoint_rooted(boxroot f, boxroot x)
 {
-  value const *x_ref = GET_REF(x);
-  boxroot y = BOX(caml_callback(GET(f), *x_ref));
-  if (compare_refs(x_ref, GET_REF(y))) {
+  boxroot y = BOX(caml_callback(GET(f), GET(x)));
+  if (compare_refs(GET_REF(x), GET_REF(y))) {
     DROP(f);
     DROP(x);
     return y;
@@ -128,9 +127,8 @@ static inline void GEN_DROP(genroot b)
 
 genroot generational_fixpoint_rooted(genroot f, genroot x)
 {
-  value const *x_ref = GEN_GET_REF(x);
-  genroot y = GEN_BOX(caml_callback(GEN_GET(f), *x_ref));
-  if (compare_refs(x_ref, GEN_GET_REF(y))) {
+  genroot y = GEN_BOX(caml_callback(GEN_GET(f), GEN_GET(x)));
+  if (compare_refs(GEN_GET_REF(x), GEN_GET_REF(y))) {
     GEN_DROP(f);
     GEN_DROP(x);
     return y;

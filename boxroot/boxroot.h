@@ -18,10 +18,10 @@ boxroot boxroot_create(value);
    that gets updated whenever its block is moved by the OCaml GC. The
    pointer becomes invalid after any call to `boxroot_delete(r)` or
    `boxroot_modify(&r,v)`. The argument must be non-null. */
-value boxroot_get(boxroot);
-value const * boxroot_get_ref(boxroot);
+inline value boxroot_get(boxroot r) { return *(value *)r; }
+inline value const * boxroot_get_ref(boxroot r) { return (value *)r; }
 
-/* `boxroot_delete(r)` desallocates the boxroot `r`. The value is no
+/* `boxroot_delete(r)` deallocates the boxroot `r`. The value is no
    longer considered as a root by the OCaml GC. The argument must be
    non-null. */
 void boxroot_delete(boxroot);
