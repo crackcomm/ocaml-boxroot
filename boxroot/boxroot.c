@@ -942,7 +942,10 @@ static int setup = 0;
 int boxroot_setup()
 {
   CRITICAL_SECTION_BEGIN();
-  if (setup) return 0;
+  if (setup) {
+    CRITICAL_SECTION_END();
+    return 0;
+  }
   // initialise globals
   in_minor_collection = 0;
   struct stats empty_stats = {0};
@@ -965,7 +968,10 @@ int boxroot_setup()
 void boxroot_teardown()
 {
   CRITICAL_SECTION_BEGIN();
-  if (!setup) return;
+  if (!setup) {
+    CRITICAL_SECTION_END();
+    return;
+  }
   // restore callbacks
   caml_scan_roots_hook = prev_scan_roots_hook;
   caml_minor_gc_begin_hook = prev_minor_begin_hook;
