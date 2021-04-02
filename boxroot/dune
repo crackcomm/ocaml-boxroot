@@ -1,7 +1,3 @@
-(library
-  (name boxroot)
-  (foreign_archives boxroot))
-
 (foreign_library
  (archive_name boxroot)
  (language c)
