@@ -4,12 +4,15 @@
 entry:
 	@echo "make all: build all benchmarks"
 	@echo "make run: run all benchmarks (important tests only)"
-	@echo "make run-more: run all benchmarks (more tests)"
 	@echo "make run-perm_count: run the 'perm_count' benchmark"
 	@echo "make run-synthetic: run the 'synthetic' benchmark"
 	@echo "make run-globroots: run the 'globroots' benchmark"
 	@echo "make test-boxroot: test boxroots on 'perm_count'"
 	@echo "make clean"
+	@echo
+	@echo "Note: for each benchmark-running target you can set TEST_MORE=1"
+	@echo "to enable some less-important benchmarks that are disabled by default"
+	@echo "  make run-globroots TEST_MORE=1"
 
 .PHONY: all
 all:
