@@ -310,6 +310,11 @@ static inline slot empty_free_list(pool *p) {
   return (slot)p;
 }
 
+static inline int is_full_pool(pool *p)
+{
+  return is_empty_free_list(p->hd.free_list, p);
+}
+
 static pool * get_empty_pool()
 {
   ++stats.live_pools;
@@ -351,36 +356,6 @@ static void free_all_pools()
 /* }}} */
 
 /* {{{ Pool class management */
-
-// Find an available pool for the class (young or old), ensure it is a
-// the start of the corresponding ring of available pools, and return
-// the pool. Return NULL if none was found and the allocation of a new
-// one failed.
-static pool * find_available_pool(int for_young)
-{
-  pool **target = for_young ? &pools.young_available : &pools.old_available;
-  if (*target != NULL && !is_empty_free_list((*target)->hd.free_list, *target)) {
-    return *target;
-  }
-  pool *new_pool = NULL;
-  if (pools.old_low != NULL) {
-    // YOUNG: We prefer to use an old pool which is not too full. We try to
-    // guarantee a good young-to-old ratio during minor scanning.
-    // OLD: We reserve the less full pools for re-use as young pools, but
-    // we did what we could, so take a less full one anyway.
-    new_pool = ring_pop(&pools.old_low);
-    // Do not bother with quasi-full pools.
-  } else if (pools.free != NULL) {
-    new_pool = ring_pop(&pools.free);
-  } else {
-    new_pool = get_empty_pool();
-  }
-  if (new_pool == NULL) return NULL;
-  new_pool->hd.class = for_young ? YOUNG : OLD;
-  ring_push_back(new_pool, target);
-  *target = new_pool;
-  return new_pool;
-}
 
 /* Take the slow path on deallocation every DEALLOC_THRESHOLD_SIZE
    deallocations. */
@@ -484,6 +459,48 @@ static void try_demote_pool(pool *p)
   pool_reclassify(p, occ);
 }
 
+// Find an available pool for the class (young or old), ensure it is a
+// the start of the corresponding ring of available pools, and return
+// the pool. Return NULL if none was found and the allocation of a new
+// one failed.
+static pool * find_available_pool(int for_young)
+{
+  pool **target = for_young ? &pools.young_available : &pools.old_available;
+  // Reclassify the first pool if it is full
+  if (*target != NULL && is_full_pool(*target)) {
+      pool *full = ring_pop(target);
+      assert(promotion_occupancy(full) == QUASI_FULL);
+      assert(for_young == (YOUNG == full->hd.class));
+      pool_reclassify(full, QUASI_FULL);
+  }
+  // Note: we only ever allocate from the the first pool of each ring,
+  // so there is at most one full pool in front of the ring. We just
+  // reclassified it with the test above, so the next pool
+  // (if it exists) cannot be full.
+  if (*target != NULL) {
+    assert(!is_full_pool(*target));
+    return *target;
+  }
+  pool *new_pool = NULL;
+  if (pools.old_low != NULL) {
+    // YOUNG: We prefer to use an old pool which is not too full. We try to
+    // guarantee a good young-to-old ratio during minor scanning.
+    // OLD: We reserve the less full pools for re-use as young pools, but
+    // we did what we could, so take a less full one anyway.
+    new_pool = ring_pop(&pools.old_low);
+    // Do not bother with quasi-full pools.
+  } else if (pools.free != NULL) {
+    new_pool = ring_pop(&pools.free);
+  } else {
+    new_pool = get_empty_pool();
+  }
+  if (new_pool == NULL) return NULL;
+  new_pool->hd.class = for_young ? YOUNG : OLD;
+  assert(*target == NULL);
+  *target = new_pool;
+  return new_pool;
+}
+
 static void promote_young_pools()
 {
   // Promote full pools
@@ -560,17 +577,9 @@ static slot * alloc_slot_slow(int for_young_block)
   }
   // TODO Latency: bound the number of young roots alloced at each
   // minor collection by scheduling a minor collection.
-  pool **available_pools = for_young_block ?
-    &pools.young_available : &pools.old_available;
-  if (*available_pools != NULL) {
-    pool *full = ring_pop(available_pools);
-    assert(promotion_occupancy(full) == QUASI_FULL);
-    assert(for_young_block == (YOUNG == full->hd.class));
-    pool_reclassify(full, QUASI_FULL);
-  }
   pool *p = find_available_pool(for_young_block);
   if (p == NULL) return NULL;
-  assert(!is_empty_free_list( p->hd.free_list, p));
+  assert(!is_full_pool(p));
   assert(for_young_block == (p->hd.class == YOUNG));
   return alloc_slot(for_young_block);
 }
