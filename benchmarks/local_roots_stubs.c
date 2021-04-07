@@ -13,11 +13,20 @@
    for OCaml values, following the "callee roots" convention:
    a function is passed value that may be unrooted, and it is
    responsible for rooting them if it may call the GC. */
-value local_fixpoint(value f, value x) {
+
+int compare_val(value x, value y)
+{
+  /* Simulate a function that does some actual work. */
+  CAMLparam2(x, y);
+  CAMLreturn(Double_val(x) == Double_val(y));
+}
+
+value local_fixpoint(value f, value x)
+{
   CAMLparam2(f, x);
   CAMLlocal1(y);
   y = caml_callback(f,x);
-  if (Double_val(x) == Double_val(y)) {
+  if (compare_val(x,y)) {
     CAMLreturn(y);
   } else {
     CAMLreturn(local_fixpoint(f, y));
@@ -30,11 +39,20 @@ value local_fixpoint(value f, value x) {
    around to its own callee without re-rooting. */
 #define BOX(v) boxroot_create(v)
 #define GET(b) boxroot_get(b)
+#define GET_REF(b) boxroot_get_ref(b)
 #define DROP(b) boxroot_delete(b)
 
-boxroot boxroot_fixpoint_rooted(boxroot f, boxroot x) {
+int compare_refs(value const *x, value const *y)
+{
+  /* Simulate a function that does some actual work---nothing to root
+     here. */
+  return Double_val(*x) == Double_val(*y);
+}
+
+boxroot boxroot_fixpoint_rooted(boxroot f, boxroot x)
+{
   boxroot y = BOX(caml_callback(GET(f), GET(x)));
-  if (Double_val(GET(x)) == Double_val(GET(y))) {
+  if (compare_refs(GET_REF(x), GET_REF(y))) {
     DROP(f);
     DROP(x);
     return y;
@@ -44,7 +62,8 @@ boxroot boxroot_fixpoint_rooted(boxroot f, boxroot x) {
   }
 }
 
-value boxroot_fixpoint(value f, value x) {
+value boxroot_fixpoint(value f, value x)
+{
   boxroot y = boxroot_fixpoint_rooted(BOX(f), BOX(x));
   value v = GET(y);
   DROP(y);
@@ -82,25 +101,34 @@ value caml_boxroot_stats(value unit)
    as a "control" that the benchmark makes sense. */
 typedef value *genroot;
 
-static inline value GEN_GET(genroot b) {
+static inline value GEN_GET(genroot b)
+{
   return *b;
 }
 
-static inline genroot GEN_BOX(value v) {
+static inline value const * GEN_GET_REF(genroot b)
+{
+  return b;
+}
+
+static inline genroot GEN_BOX(value v)
+{
   value *b = malloc(sizeof(value));
   *b = v;
   caml_register_generational_global_root(b);
   return b;
 }
 
-static inline void GEN_DROP(genroot b) {
+static inline void GEN_DROP(genroot b)
+{
   caml_remove_generational_global_root(b);
   free(b);
 }
 
-genroot generational_fixpoint_rooted(genroot f, genroot x) {
+genroot generational_fixpoint_rooted(genroot f, genroot x)
+{
   genroot y = GEN_BOX(caml_callback(GEN_GET(f), GEN_GET(x)));
-  if (Double_val(GEN_GET(x)) == Double_val(GEN_GET(y))) {
+  if (compare_refs(GEN_GET_REF(x), GEN_GET_REF(y))) {
     GEN_DROP(f);
     GEN_DROP(x);
     return y;
@@ -110,7 +138,8 @@ genroot generational_fixpoint_rooted(genroot f, genroot x) {
   }
 }
 
-value generational_fixpoint(value f, value x) {
+value generational_fixpoint(value f, value x)
+{
   genroot y = generational_fixpoint_rooted(GEN_BOX(f), GEN_BOX(x));
   value v = GEN_GET(y);
   GEN_DROP(y);

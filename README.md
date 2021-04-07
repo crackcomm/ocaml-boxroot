@@ -224,22 +224,28 @@ the length of the C-side call chain.
 The local-roots version is as follows:
 
 ```c
-value local_fixpoint(value f, value x) {
+int compare_val(value x, value y);
+
+value local_fixpoint(value f, value x)
+{
   CAMLparam2(f, x);
   CAMLlocal1(y);
   y = caml_callback(f,x);
-  if (Double_val(x) == Double_val(y)) {
+  if (compare_val(x, y)) {
     CAMLreturn(y);
   } else {
     CAMLreturn(local_fixpoint(f, y));
   }
 }
 ```
+where `compare_val` compares the values of `x` and `y`, but introduces
+local roots in order to simulate a more complex operation.
 
 The boxroot version is as follows:
 
 ```c
-value boxroot_fixpoint(value f, value x) {
+value boxroot_fixpoint(value f, value x)
+{
   boxroot y = boxroot_fixpoint_rooted(BOX(f), BOX(x));
   value v = GET(y);
   DROP(y);
@@ -250,9 +256,12 @@ value boxroot_fixpoint(value f, value x) {
 #define GET(b) boxroot_get(b)
 #define DROP(b) boxroot_delete(b)
 
-boxroot boxroot_fixpoint_rooted(boxroot f, boxroot x) {
+int compare_refs(value const *x, value const *y);
+
+boxroot boxroot_fixpoint_rooted(boxroot f, boxroot x)
+{
   boxroot y = BOX(caml_callback(GET(f), GET(x)));
-  if (Double_val(GET(x)) == Double_val(GET(y))) {
+  if (compare_refs(GET_REF(x), GET_REF(y))) {
     DROP(f);
     DROP(x);
     return y;
@@ -262,12 +271,13 @@ boxroot boxroot_fixpoint_rooted(boxroot f, boxroot x) {
   }
 }
 ```
+where `compare_refs` does the same work as `compare_val` but does not
+need to root its values.
 
-The work is done by `boxroot_fixpoint_rooted`, but we need
-a `boxroot_fixpoint` wrapper to go from the callee-roots
-convention expected by OCaml `external` declarations to
-a caller-root convention. (This wrapper also adds some
-overhead for small call depths.)
+The work is done by `boxroot_fixpoint_rooted`, but we need a
+`boxroot_fixpoint` wrapper to go from the callee-roots convention
+expected by OCaml `external` declarations to a caller-root convention.
+(This wrapper also adds some overhead for small call depths.)
 
 Remark: we iterate this computation C/N times, so the total
 running times remain small for different values of N. It does
@@ -276,44 +286,46 @@ not make sense to compare times for different values of N.
 ```
 Benchmark: local_roots
 ---
-local_roots(ROOT=local  , N=1): 1.40s
+local_roots(ROOT=local       , N=1): 1.86s
+local_roots(ROOT=boxroot     , N=1): 2.79s
 ---
-local_roots(ROOT=boxroot, N=1): 3.14s
+local_roots(ROOT=local       , N=2): 1.84s
+local_roots(ROOT=boxroot     , N=2): 2.32s
 ---
-local_roots(ROOT=local  , N=2): 1.40s
+local_roots(ROOT=local       , N=3): 2.00s
+local_roots(ROOT=boxroot     , N=3): 1.99s
 ---
-local_roots(ROOT=boxroot, N=2): 2.45s
+local_roots(ROOT=local       , N=4): 1.93s
+local_roots(ROOT=boxroot     , N=4): 1.86s
 ---
-local_roots(ROOT=local  , N=5): 1.40s
+local_roots(ROOT=local       , N=5): 1.87s
+local_roots(ROOT=boxroot     , N=5): 1.76s
 ---
-local_roots(ROOT=boxroot, N=5): 1.98s
+local_roots(ROOT=local       , N=10): 1.96s
+local_roots(ROOT=boxroot     , N=10): 1.68s
 ---
-local_roots(ROOT=local  , N=10): 1.51s
+local_roots(ROOT=local       , N=100): 1.90s
+local_roots(ROOT=boxroot     , N=100): 1.41s
 ---
-local_roots(ROOT=boxroot, N=10): 1.92s
+local_roots(ROOT=local       , N=1000): 2.20s
+local_roots(ROOT=boxroot     , N=1000): 1.38s
 ---
-local_roots(ROOT=local  , N=100): 1.97s
----
-local_roots(ROOT=boxroot, N=100): 1.76s
----
-local_roots(ROOT=local  , N=1000): 2.29s
----
-local_roots(ROOT=boxroot, N=1000): 1.62s
 ```
 
-We see that, for a call depth of 1, the boxroot version is
-about twice slower than the local-roots version. This is
-a good result: the amount of computation is very small, so we
-expect a large overhead for boxroot over local roots.
+We see that, for a call depth of 1, the boxroot version is about 60%
+slower than the local-roots version. This is a good result: the amount
+of computation is very small, and there is an up-front cost for
+wrapping the function, so we could initially expect a large overhead
+for boxroot over local roots.
 
-The performance advantage of local roots over boxroots
-disappears somewhere between N=10 and N=100.
+The performance advantage of local roots over boxroots disappears
+around N=3 in this micro-benchmark.
 
 Our conclusions:
-- Using boxroots instead of local roots everywhere is
-  *possible* --- not a performance disaster.
-- It could be beneficial when traversing large OCaml
-  structures from a foreign language, with many function calls.
+- Using boxroots is competitive with local roots.
+- It could be beneficial in specific scenarios, for instance when
+  traversing large OCaml structures from a foreign language, with many
+  function calls.
 
 
 ## Implementation

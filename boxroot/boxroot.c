@@ -618,15 +618,8 @@ boxroot boxroot_create(value init)
   return br;
 }
 
-value boxroot_get(boxroot root)
-{
-  return *(value *)root;
-}
-
-value const * boxroot_get_ref(boxroot root)
-{
-  return (value *)root;
-}
+extern value boxroot_get(boxroot root);
+extern value const * boxroot_get_ref(boxroot root);
 
 // hot path
 void boxroot_delete(boxroot root)

@@ -7,6 +7,7 @@ entry:
 	@echo "make run-perm_count: run the 'perm_count' benchmark"
 	@echo "make run-synthetic: run the 'synthetic' benchmark"
 	@echo "make run-globroots: run the 'globroots' benchmark"
+	@echo "make run-local_roots: run the 'local_roots' benchmark"
 	@echo "make test-boxroot: test boxroots on 'perm_count'"
 	@echo "make clean"
 	@echo
@@ -75,7 +76,7 @@ run-globroots-all: all
 run-local_roots: all
 	echo "Benchmark: local_roots" \
 	&& echo "---" \
-	$(foreach N, 1 2 5 10 100 1000, \
+	$(foreach N, 1 2 3 4 5 10 100 1000, \
 	  $(foreach ROOT, local boxroot $(if $(TEST_MORE),generational,), \
 	    && (N=$(N) ROOT=$(ROOT) dune exec ./benchmarks/local_roots.exe) \
 	  ) && echo "---")
