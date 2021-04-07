@@ -76,7 +76,7 @@ run-globroots-all: all
 run-local_roots: all
 	echo "Benchmark: local_roots" \
 	&& echo "---" \
-	$(foreach N, 1 2 3 4 5 10 100 1000, \
+	$(foreach N, 1 2 $(if $(TEST_MORE),3 4,) 5 10 100 1000, \
 	  $(foreach ROOT, local boxroot $(if $(TEST_MORE),generational,), \
 	    && (N=$(N) ROOT=$(ROOT) dune exec ./benchmarks/local_roots.exe) \
 	  ) && echo "---")
