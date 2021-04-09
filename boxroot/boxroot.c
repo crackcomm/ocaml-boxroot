@@ -827,8 +827,10 @@ void boxroot_print_stats()
 
   if (!boxroot_used() && total_scanning_work == 0) return;
 
-  int64_t time_per_minor = stats.total_minor_time / stats.minor_collections;
-  int64_t time_per_major = stats.total_major_time / stats.major_collections;
+  int64_t time_per_minor =
+      stats.minor_collections ? stats.total_minor_time / stats.minor_collections : 0;
+  int64_t time_per_major =
+      stats.major_collections ? stats.total_major_time / stats.major_collections : 0;
 
   printf("POOL_LOG_SIZE: %d (%'d KiB, %'d roots/pool)\n"
          "POOL_ALIGNMENT: %'d kiB\n"
