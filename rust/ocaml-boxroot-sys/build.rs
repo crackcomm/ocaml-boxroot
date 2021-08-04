@@ -1,14 +1,48 @@
 /* SPDX-License-Identifier: MIT */
-fn build_boxroot(ocaml_path: &str) {
+
+#[cfg(feature = "bundle-boxroot")]
+fn build_boxroot() {
+    println!("cargo:rerun-if-changed=vendor/boxroot/boxroot.c");
+    println!("cargo:rerun-if-changed=vendor/boxroot/boxroot.h");
+    println!("cargo:rerun-if-changed=vendor/boxroot/ocaml_hook.c");
+    println!("cargo:rerun-if-changed=vendor/boxroot/ocaml_hook.h");
+    println!("cargo:rerun-if-env-changed=OCAMLOPT");
+    println!("cargo:rerun-if-env-changed=OCAML_WHERE_PATH");
+
+    let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let ocaml_where_path = std::env::var("OCAML_WHERE_PATH");
+    let ocamlopt = std::env::var("OCAMLOPT").unwrap_or_else(|_| "ocamlopt".to_string());
+
+    let ocaml_path = match ocaml_where_path {
+        Ok(path) => path,
+        _ => std::str::from_utf8(
+            std::process::Command::new(&ocamlopt)
+                .arg("-where")
+                .output()
+                .unwrap()
+                .stdout
+                .as_ref(),
+        )
+        .unwrap()
+        .trim()
+        .to_owned(),
+    };
+
     let mut config = cc::Build::new();
 
-    config.include(ocaml_path);
+    config.include(&ocaml_path);
     config.include("vendor/boxroot/");
     config.file("vendor/boxroot/boxroot.c");
     config.file("vendor/boxroot/ocaml_hooks.c");
     config.file("vendor/boxroot/platform.c");
 
     config.compile("libocaml-boxroot.a");
+
+    println!("cargo:rustc-link-search={}", out_dir.display());
+    println!("cargo:rustc-link-lib=static=ocaml-boxroot");
+
+    #[cfg(feature = "link-ocaml-runtime-and-dummy-program")]
+    link_runtime(out_dir, &ocamlopt, &ocaml_path).unwrap();
 }
 
 #[cfg(feature = "link-ocaml-runtime-and-dummy-program")]
@@ -65,48 +99,6 @@ fn link_runtime(
 }
 
 fn main() {
-    println!("cargo:rerun-if-changed=vendor/boxroot/boxroot.c");
-    println!("cargo:rerun-if-changed=vendor/boxroot/boxroot.h");
-    println!("cargo:rerun-if-changed=vendor/boxroot/ocaml_hook.c");
-    println!("cargo:rerun-if-changed=vendor/boxroot/ocaml_hook.h");
-    println!("cargo:rerun-if-env-changed=OCAMLOPT");
-    println!("cargo:rerun-if-env-changed=OCAML_WHERE_PATH");
-
-    let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
-    let ocaml_where_path = std::env::var("OCAML_WHERE_PATH");
-    let ocamlopt = std::env::var("OCAMLOPT").unwrap_or_else(|_| "ocamlopt".to_string());
-
-    let ocaml_path: String;
-
-    match ocaml_where_path {
-        Ok(path) => {
-            ocaml_path = path;
-        }
-        _ => {
-            if cfg!(feature = "without-ocamlopt") {
-                // Use dummy include files in this case
-                ocaml_path = "utils/without-ocamlopt".to_owned();
-            } else {
-                ocaml_path = std::str::from_utf8(
-                    std::process::Command::new(&ocamlopt)
-                        .arg("-where")
-                        .output()
-                        .unwrap()
-                        .stdout
-                        .as_ref(),
-                )
-                .unwrap()
-                .trim()
-                .to_owned();
-            }
-        }
-    }
-
-    build_boxroot(&ocaml_path);
-
-    println!("cargo:rustc-link-search={}", out_dir.display());
-    println!("cargo:rustc-link-lib=static=ocaml-boxroot");
-
-    #[cfg(feature = "link-ocaml-runtime-and-dummy-program")]
-    link_runtime(out_dir, &ocamlopt, &ocaml_path).unwrap();
+    #[cfg(feature = "bundle-boxroot")]
+    build_boxroot();
 }
