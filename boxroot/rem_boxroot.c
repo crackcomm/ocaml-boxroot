@@ -90,20 +90,26 @@ typedef union { raw_slot raw; free_slot free; full_slot full; } slot;
    the remembered set.
 
    Free slots have their low bit set to look like immdiates.
-   Once untagged, they are pointers to another free list element,
-   or to the pool itself, denoting the empty free list.
+   They form two disjoint linked lists:
+   - the "major" free list which may contain any value
+   - the "minor" free list whose slots are already part of the
+     remembered set
 
    Free slots can be distinguished from full slots: pointers into the pool
    itself may only be free slots, as they are not valid OCaml values.
 
    When a minor collection happens, no scanning needs to be done as
-   the GC already traverses the remembered set.
+   the GC already traverses the remembered set. We just add the
+   minor-free-list slots to the major free list.
 */
 
 struct header {
   struct pool *prev;
   struct pool *next;
-  slot *free_list;
+  slot *major_free_list;
+  slot *minor_free_list;
+  slot *last_minor_free_slot;
+  // invariant: (!is_empty_free_list(minor_free_list) => (last_minor_free_slot != NULL)
   int alloc_count;
 };
 
@@ -289,7 +295,7 @@ static inline void free_list_push(slot *s, slot **free_list) {
 }
 
 static inline slot *free_list_pop(slot **free_list) {
-  DEBUGassert (*free_list != NULL);
+  DEBUGassert (!is_empty_free_list(*free_list, get_pool_header(*free_list)));
   slot *s = *free_list;
   DEBUGassert(is_free_slot(s->raw, get_pool_header(s)));
   *free_list = untag_free_slot(s->free);
@@ -326,12 +332,14 @@ static pool * get_empty_pool(void)
   if (p == NULL) return NULL;
 
   ring_link(p, p);
-  p->hd.free_list = empty_free_list(p);
+  p->hd.major_free_list = empty_free_list(p);
+  p->hd.minor_free_list = empty_free_list(p);
+  p->hd.last_minor_free_slot = NULL;
   p->hd.alloc_count = 0;
 
   /* Put all the pool elements in its free list. */
   for (slot *s = p->roots + POOL_ROOTS_CAPACITY - 1; s >= p->roots; --s) {
-    free_list_push(s, &(p->hd.free_list));
+    free_list_push(s, &(p->hd.major_free_list));
   }
 
   return p;
@@ -382,50 +390,66 @@ static void free_all_pools(void) {
 #define UNLIKELY(a) (a)
 #endif
 
-static slot * alloc_slot_slow(void);
+static int setup;
 
 // fails if the front pool is full
 // hot path
-static inline slot * alloc_slot(void)
+static inline slot * alloc_slot(int for_young)
 {
   pool *p = pools;
-  if (LIKELY(p != NULL)) {
-      slot **free_list = &(p->hd.free_list);
-      if (LIKELY(!is_empty_free_list(*free_list, p))) {
-        slot *new_slot = free_list_pop(free_list);
-        p->hd.alloc_count++;
-        /* Latency remark: adding young roots to the remembered set
-           bounds latency incurred by allocating many young roots, by
-           forcing a minor collection when the remembered set
-           overflows. */
-        return new_slot;
-      }
+  if (UNLIKELY(p == NULL || is_full_pool(p))) {
+    // We might be here because boxroot is not setup.
+    if (!setup) {
+      fprintf(stderr, "boxroot is not setup\n");
+      return NULL;
+    }
+    p = find_available_pool();
+    if (p == NULL) return NULL;
+    assert(!is_full_pool(p));
   }
-  return alloc_slot_slow();
-}
+  p->hd.alloc_count++;
+  if (for_young) {
+    if (LIKELY(!is_empty_free_list(p->hd.minor_free_list, p))) {
+      return free_list_pop(&(p->hd.minor_free_list));
+    } else {
+      // take a major slot, add it to the remembered set
+      slot *new_slot = free_list_pop(&(p->hd.major_free_list));
+      remember(Caml_state, new_slot);
+      return new_slot;
+    }
+  } else {
+    if (LIKELY(!is_empty_free_list(p->hd.major_free_list, p))) {
+      return free_list_pop(&(p->hd.major_free_list));
+    } else {
+      /* If there are minor slots available, but no major slots left, we
+         just reuse a minor slot, forgetting that it is in the
+         remembered set.
 
-static int setup;
-
-// Succeeds if the front pool is full but an available pool can be found
-static slot * alloc_slot_slow(void)
-{
-  // We might be here because boxroot is not setup.
-  if (!setup) {
-    fprintf(stderr, "boxroot is not setup\n");
-    return NULL;
+         Note: we could also look for another pool with minor slots
+         left, but we prefer to keep the minor free list as a pool-local
+         optimization. Looking for another pool can degrade performance
+         (if we have to look over all pools without finding anything)
+         and we don't know of a good, simple strategy to avoid them.
+      */
+      return free_list_pop(&(p->hd.minor_free_list));
+    }
   }
-
-  pool *p = find_available_pool();
-  if (p == NULL) return NULL;
-  assert(!is_full_pool(p));
-
-  return alloc_slot();
 }
 
 // hot path
 static inline void dealloc_slot(slot *v) {
   pool *p = get_pool_header(v);
-  free_list_push(v, &(p->hd.free_list));
+  if (!is_young_block(v->full)) {
+    free_list_push(v, &(p->hd.major_free_list));
+  } else {
+    /* If the performance of the branch below matters, then we are in
+       the case where many young boxroots are deleted, so the check is
+       UNLIKELY. */
+    if (UNLIKELY(is_empty_free_list(p->hd.minor_free_list, p))) {
+      p->hd.last_minor_free_slot = v;
+    }
+    free_list_push(v, &(p->hd.minor_free_list));
+  }
   p->hd.alloc_count--;
 }
 
@@ -438,11 +462,10 @@ rem_boxroot rem_boxroot_create(value init)
 {
   if (DEBUG) ++stats.total_create;
   CRITICAL_SECTION_BEGIN();
-  slot *cell = alloc_slot();
+  slot *cell = alloc_slot(is_young_block(init));
   CRITICAL_SECTION_END();
   if (UNLIKELY(cell == NULL)) return NULL;
   cell->full = init;
-  if (is_young_block(init)) remember(Caml_state, cell);
   return (rem_boxroot)cell;
 }
 
@@ -487,26 +510,30 @@ static void validate_roots(pool *p, long *out_free_count, long *out_full_count) 
     if (is_free_slot(s->raw, p)) free_count++;
     else full_count++;
   }
-  *out_free_count = free_count;
-  *out_full_count = full_count;
+  *out_free_count += free_count;
+  *out_full_count += full_count;
 }
 
-static void validate_free_list(pool *p, long *out_free_list_count) {
+static void validate_free_list(pool *p, slot *free_list, long *out_free_list_count) {
   long count = 0;
-  for (slot *s = p->hd.free_list;
+  for (slot *s = free_list;
        !is_empty_free_list(s, p);
        s = untag_free_slot(s->free)) {
     assert(Is_long(s->full));
     assert(is_free_slot(s->raw, p));
     ++count;
   }
-  *out_free_list_count = count;
+  *out_free_list_count += count;
 }
 
 static void validate_pool(pool *p) {
-  long free_roots_count, full_roots_count, free_list_count;
+  long free_roots_count = 0, full_roots_count = 0, free_list_count = 0;
   validate_roots(p, &free_roots_count, &full_roots_count);
-  validate_free_list(p, &free_list_count);
+  validate_free_list(p, p->hd.major_free_list, &free_list_count);
+  validate_free_list(p, p->hd.minor_free_list, &free_list_count);
+  assert(is_empty_free_list(p->hd.minor_free_list, p)
+         || (p->hd.last_minor_free_slot != NULL
+             && is_free_slot(p->hd.last_minor_free_slot->raw, p)));
   assert(free_roots_count == free_list_count);
   assert(full_roots_count == p->hd.alloc_count);
   assert(free_roots_count + full_roots_count == POOL_ROOTS_CAPACITY);
@@ -524,23 +551,35 @@ static void validate(void)
   } while (p != pools);
 }
 
-static void scan_pool(scanning_action action, void *data, pool *pl)
+static void scan_pool(scanning_action action, void *data, pool *p)
 {
   if (boxroot_in_minor_collection()) {
       /* We use the remembered set for minor boxroots,
-         so no scanning is necesary on minor collections. */
+         so no scanning is necesary on minor collections.
+
+         The remembered set is cleared by the minor collection, so the
+         "minor" free list slots must now be moved to the major free
+         list. */
+      if (!is_empty_free_list(p->hd.minor_free_list, p)) {
+        assert(p->hd.last_minor_free_slot != NULL);
+        assert(is_free_slot(p->hd.minor_free_list->raw, p));
+        assert(is_empty_free_list(untag_free_slot(p->hd.last_minor_free_slot->free), p));
+        p->hd.last_minor_free_slot->free = tag_free_slot(p->hd.major_free_list);
+        p->hd.major_free_list = p->hd.minor_free_list;
+        p->hd.minor_free_list = empty_free_list(p);
+      }
       return;
   } else {
-    int allocs_to_find = pool->hd.alloc_count;
-    stats.useful_scanning_work += pool->hd.alloc_count;
-    for (slot *current = pool->roots;
-         current < pool->roots + POOL_ROOTS_CAPACITY;
+    int allocs_to_find = p->hd.alloc_count;
+    stats.useful_scanning_work += p->hd.alloc_count;
+    for (slot *current = p->roots;
+         current < p->roots + POOL_ROOTS_CAPACITY;
          ++current) {
       if (allocs_to_find == 0) {
-        stats.total_scanning_work += (current - pool->roots);
+        stats.total_scanning_work += (current - p->roots);
         return;
       }
-      if (!is_free_slot(current->raw, pool)) {
+      if (!is_free_slot(current->raw, p)) {
         /* we only scan in the major collection,
            after young blocks have been oldified */
         DEBUGassert(!is_young_block(current->full));
@@ -631,7 +670,7 @@ void rem_boxroot_print_stats()
   int scanning_work = average(stats.total_scanning_work, stats.major_collections);
   int useful_scanning_work = average(stats.useful_scanning_work, stats.major_collections);
   int ring_operations_per_pool = average(stats.ring_operations, stats.total_alloced_pools);
- 
+
   if (!boxroot_used()) return;
 
   int64_t time_per_major =
