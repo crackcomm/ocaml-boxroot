@@ -29,7 +29,8 @@ let implementations : (string * (module Ref)) list = [
   "global", (module Global_ref);
   "generational", (module Generational_ref);
   "boxroot", (module Boxroot_ref);
-  "dll-boxroot", (module Dll_boxroot_ref);
+  "dll_boxroot", (module Dll_boxroot_ref);
+  "rem_boxroot", (module Rem_boxroot_ref);
   "gc", (module Gc_ref);
   "ocaml", (module Ocaml_ref);
 ]

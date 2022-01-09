@@ -104,7 +104,7 @@ count: 3628800
 ocaml: 2.03s         
 count: 3628800
 ---
-dll-boxroot: 2.08s   
+dll_boxroot: 2.08s   
 count: 3628800
 ---
 generational: 5.57s  
@@ -154,7 +154,7 @@ boxroot: 5.92s
 ---
 ocaml: 7.14s         
 ---
-dll-boxroot: 6.51s   
+dll_boxroot: 6.51s   
 ---
 generational: 10.98s 
 ---
@@ -194,7 +194,7 @@ boxroot: 1.20s
 ---
 ocaml: 1.40s         
 ---
-dll-boxroot: 1.07s   
+dll_boxroot: 1.07s   
 ---
 generational: 1.17s  
 ---
@@ -208,7 +208,7 @@ major collections. List-based implementations perform well, whereas
 have to scan on the order of a full memory pool at every minor
 collection even if there are only a few young roots, for a pool size
 currently chosen large (16KB). Nevertheless, the overhead compared to
-`dll-boxroot` is only 2µs per minor collection.
+`dll_boxroot` is only 2µs per minor collection.
 
 ### Local roots benchmark
 

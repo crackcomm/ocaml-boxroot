@@ -8,15 +8,20 @@ type impl = {
 external local_fixpoint : (float -> float) -> float -> float = "local_fixpoint"
 external boxroot_fixpoint : (float -> float) -> float -> float = "boxroot_fixpoint"
 external dll_boxroot_fixpoint : (float -> float) -> float -> float = "dll_boxroot_fixpoint"
-external generational_fixpoint : (float -> float) -> float -> float = "generational_fixpoint"
+external rem_boxroot_fixpoint : (float -> float) -> float -> float = "rem_boxroot_fixpoint"
+external generational_fixpoint : (float -> float) -> float -> float = "generational_root_fixpoint"
 
-external boxroot_setup : unit -> unit = "caml_boxroot_setup"
-external boxroot_teardown : unit -> unit = "caml_boxroot_teardown"
-external boxroot_stats : unit -> unit = "caml_boxroot_stats"
+external boxroot_setup : unit -> unit = "boxroot_setup_caml"
+external boxroot_teardown : unit -> unit = "boxroot_teardown_caml"
+external boxroot_stats : unit -> unit = "boxroot_stats_caml"
 
-external dll_boxroot_setup : unit -> unit = "caml_dll_boxroot_setup"
-external dll_boxroot_teardown : unit -> unit = "caml_dll_boxroot_teardown"
-external dll_boxroot_stats : unit -> unit = "caml_dll_boxroot_stats"
+external dll_boxroot_setup : unit -> unit = "dll_boxroot_setup_caml"
+external dll_boxroot_teardown : unit -> unit = "dll_boxroot_teardown_caml"
+external dll_boxroot_stats : unit -> unit = "dll_boxroot_stats_caml"
+
+external rem_boxroot_setup : unit -> unit = "rem_boxroot_setup_caml"
+external rem_boxroot_teardown : unit -> unit = "rem_boxroot_teardown_caml"
+external rem_boxroot_stats : unit -> unit = "rem_boxroot_stats_caml"
 
 
 let local = {
@@ -47,10 +52,18 @@ let dll_boxroot = {
   stats = dll_boxroot_stats;
 }
 
+let rem_boxroot = {
+  fixpoint = rem_boxroot_fixpoint;
+  setup = rem_boxroot_setup;
+  teardown = rem_boxroot_teardown;
+  stats = rem_boxroot_stats;
+}
+
 let implementations = [
   "local", local;
   "boxroot", boxroot;
   "dll_boxroot", dll_boxroot;
+  "rem_boxroot", rem_boxroot;
   "generational", generational;
 ]
 
