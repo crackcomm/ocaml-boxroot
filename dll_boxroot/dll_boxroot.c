@@ -34,7 +34,13 @@
 
 /* {{{ Parameters */
 
+#if defined(BOXROOT_DEBUG) && (BOXROOT_DEBUG == 1)
+#define DEBUG 1
+#define DEBUGassert(x) assert(x)
+#else
 #define DEBUG 0
+#define DEBUGassert(x) ((void)0)
+#endif
 
 /* }}} */
 
@@ -103,11 +109,6 @@ static struct stats stats;
       elem = elem->next;                              \
     } while (elem != ring);                           \
   } while (0)
-
-static int is_single_elem(ring p)
-{
-    return (p->prev == p && p == p->next);
-}
 
 inline static void ring_link(ring p, ring q)
 {
