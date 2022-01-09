@@ -526,25 +526,31 @@ static void validate(void)
 
 static void scan_pool(scanning_action action, void *data, pool *pl)
 {
-  int allocs_to_find = pl->hd.alloc_count;
-  stats.useful_scanning_work += pl->hd.alloc_count;
-  for (slot *current = pl->roots;
-       current < pl->roots + POOL_ROOTS_CAPACITY;
-       ++current) {
-    if (allocs_to_find == 0) {
-      stats.total_scanning_work += (current - pl->roots);
+  if (boxroot_in_minor_collection()) {
+      /* We use the remembered set for minor boxroots,
+         so no scanning is necesary on minor collections. */
       return;
+  } else {
+    int allocs_to_find = pool->hd.alloc_count;
+    stats.useful_scanning_work += pool->hd.alloc_count;
+    for (slot *current = pool->roots;
+         current < pool->roots + POOL_ROOTS_CAPACITY;
+         ++current) {
+      if (allocs_to_find == 0) {
+        stats.total_scanning_work += (current - pool->roots);
+        return;
+      }
+      if (!is_free_slot(current->raw, pool)) {
+        /* we only scan in the major collection,
+           after young blocks have been oldified */
+        DEBUGassert(!is_young_block(current->full));
+        --allocs_to_find;
+        CALL_GC_ACTION(action, data, current->full, &(current->full));
+      }
     }
-    if (!is_free_slot(current->raw, pl)) {
-      /* we only scan in the major collection,
-         after young blocks have been oldified */
-      DEBUGassert(!is_young_block(current->full));
-      --allocs_to_find;
-      CALL_GC_ACTION(action, data, current->full, &(current->full));
-    }
+    assert(allocs_to_find == 0);
+    stats.total_scanning_work += POOL_ROOTS_CAPACITY;
   }
-  assert(allocs_to_find == 0);
-  stats.total_scanning_work += POOL_ROOTS_CAPACITY;
 }
 
 static void scan_pools(scanning_action action, void *data)
@@ -575,7 +581,6 @@ static void scan_pools(scanning_action action, void *data)
 static void scan_roots(scanning_action action, void *data)
 {
   if (DEBUG) validate();
-  assert (!boxroot_in_minor_collection());
   scan_pools(action, data);
   if (DEBUG) validate();
 }
@@ -708,10 +713,6 @@ static void scanning_callback(scanning_action action, void *data)
 
   if (in_minor_collection) ++stats.minor_collections;
   else ++stats.major_collections;
-
-  /* We use the remembered set for minor boxroots,
-     so no scanning is necesary on minor collections. */
-  if (in_minor_collection) return;
 
   // If no boxroot has been allocated, then scan_roots should not have
   // any noticeable cost. For experimental purposes, since this hook
