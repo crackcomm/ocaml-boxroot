@@ -231,6 +231,7 @@ static void * alloc_uninitialised_pool(void)
 }
 
 static void free_pool(pool *p) {
+    ++stats.total_freed_pools;
     // Win32: _aligned_free(p);
     free(p);
 }
@@ -634,12 +635,12 @@ static void free_empty_pools(void) {
   /* We don't scan the full-pool ring, whose pools are almost-full. */
   pool *p = pools;
   /* We free all empty pools except one, to avoid stuttering effects. */
-  int kept_one_empty_pool = 0;
+  int keep_empty_pools = 1;
   do {
     pool *next = p->hd.next;
     if (is_empty_pool(p)) {
-      if (!kept_one_empty_pool) {
-        kept_one_empty_pool = 1;
+      if (keep_empty_pools > 0) {
+        --keep_empty_pools;
       } else {
         free_pool(pool_remove(p));
       }
