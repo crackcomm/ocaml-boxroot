@@ -133,6 +133,10 @@ static_assert(sizeof(pool) == POOL_SIZE, "bad pool size");
 /* Global pool ring. */
 static pool *pools = NULL;
 
+/* On-the-side ring of pools that were found to be full
+   by find_available_pool(). */
+static pool *full_pools = NULL;
+
 /* Global mutex */
 #if defined(ENABLE_BOXROOT_MUTEX) && (ENABLE_BOXROOT_MUTEX == 1)
 static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -163,6 +167,8 @@ struct stats {
   long long is_free_slot; // number of times is_free_slot was called
   long long is_empty_free_list; // number of times is_empty_free_list was called
   long long remember; // number of minor values added to the remembered set
+  long long find_available_pool; // number of times find_available_pool was called
+  long long find_available_pool_work; // total work of find_available_pool was called
 };
 
 static struct stats stats;
@@ -323,6 +329,11 @@ static inline int is_empty_pool(pool *p)
   return (p->hd.alloc_count == 0);
 }
 
+static inline int is_almost_full_pool(pool *p)
+{
+  return (p->hd.alloc_count > POOL_ROOTS_CAPACITY * 3 / 4);
+}
+
 static pool * get_empty_pool(void)
 {
   ++stats.live_pools;
@@ -348,27 +359,34 @@ static pool * get_empty_pool(void)
 /* Find an available non-full pool or allocate a new one, ensure it is at the
    start of the ring of pools, and return it.
 
+   Full pools encountered are moved to the full_pools ring.
+
    Returns NULL if none was found and the allocation of a new
    one failed. */
 static pool * find_available_pool(void)
 {
-  pool *full_pools = NULL;
+  if (DEBUG) stats.find_available_pool++;
   while (pools != NULL && is_full_pool(pools)) {
+    if (DEBUG) stats.find_available_pool_work++;
     ring_push_back(ring_pop(&pools), &full_pools);
   }
   if (pools == NULL) {
+    if (DEBUG) stats.find_available_pool_work++;
     pools = get_empty_pool();
     if (pools == NULL) return NULL;
   }
-  ring_push_back(full_pools, &pools);
+  if (DEBUG) stats.find_available_pool_work++;
+  assert(pools != NULL && !is_full_pool(pools));
   return pools;
 }
 
-// remove the given pool from the global pool ring
-static void pool_remove(pool *p)
+// remove the given pool from its global pool ring
+static pool *pool_remove(pool *p)
 {
   pool *removed = ring_pop(&p);
   if (removed == pools) pools = p;
+  if (removed == full_pools) full_pools = p;
+  return removed;
 }
 
 static void free_all_pools(void) {
@@ -451,6 +469,13 @@ static inline void dealloc_slot(slot *v) {
     free_list_push(v, &(p->hd.minor_free_list));
   }
   p->hd.alloc_count--;
+  if (UNLIKELY(p->hd.alloc_count == POOL_ROOTS_CAPACITY * 3 / 4)) {
+    // the pool at this point is either in 'pools' or 'full_pools';
+    // ensure that it goes back to 'pools' in any case.
+    if (DEBUG) stats.find_available_pool_work++;
+    pool *removed = pool_remove(p);
+    ring_push_back(removed, &pools);
+  }
 }
 
 /* }}} */
@@ -539,16 +564,19 @@ static void validate_pool(pool *p) {
   assert(free_roots_count + full_roots_count == POOL_ROOTS_CAPACITY);
 }
 
-static void validate(void)
-{
-  pool *p;
-  if (pools == NULL) return;
-
-  p = pools;
+static void validate_pool_ring(pool *first_pool) {
+  if (first_pool == NULL) return;
+  pool *p = first_pool;
   do {
     validate_pool(p);
     p = p->hd.next;
-  } while (p != pools);
+  } while (p != first_pool);
+}
+
+static void validate(void)
+{
+  validate_pool_ring(pools);
+  validate_pool_ring(full_pools);
 }
 
 static void scan_pool(scanning_action action, void *data, pool *p)
@@ -592,25 +620,28 @@ static void scan_pool(scanning_action action, void *data, pool *p)
   }
 }
 
-static void scan_pools(scanning_action action, void *data)
+static void scan_pool_ring(scanning_action action, void *data, pool *first_pool)
 {
-  pool *p = pools;
+  if (first_pool == NULL) return;
+  pool *p = first_pool;
   do {
     scan_pool(action, data, p);
     p = p->hd.next;
-  } while (p != pools);
+  } while (p != first_pool);
+}
 
-  /* we free all empty pools except one, to avoid stuttering effects */
+static void free_empty_pools(void) {
+  /* We don't scan the full-pool ring, whose pools are almost-full. */
+  pool *p = pools;
+  /* We free all empty pools except one, to avoid stuttering effects. */
   int kept_one_empty_pool = 0;
-  assert(p == pools);
   do {
     pool *next = p->hd.next;
     if (is_empty_pool(p)) {
       if (!kept_one_empty_pool) {
         kept_one_empty_pool = 1;
       } else {
-        pool_remove(p);
-        free_pool(p);
+        free_pool(pool_remove(p));
       }
     }
     p = next;
@@ -620,7 +651,9 @@ static void scan_pools(scanning_action action, void *data)
 static void scan_roots(scanning_action action, void *data)
 {
   if (DEBUG) validate();
-  scan_pools(action, data);
+  scan_pool_ring(action, data, pools);
+  scan_pool_ring(action, data, full_pools);
+  free_empty_pools();
   if (DEBUG) validate();
 }
 
@@ -732,6 +765,14 @@ void rem_boxroot_print_stats()
          stats.is_free_slot,
          stats.is_empty_free_list,
          stats.remember);
+
+  printf("find_available_pool: %'lld\n"
+         "find_available_pool_work: %'lld\n"
+         "roots created per pool work: %'lld\n"
+         , stats.find_available_pool
+         , stats.find_available_pool_work
+         , stats.total_create / stats.find_available_pool_work
+      );
 #endif
 }
 
@@ -782,6 +823,7 @@ int rem_boxroot_setup()
   struct stats empty_stats = {0};
   stats = empty_stats;
   pools = NULL;
+  full_pools = NULL;
   boxroot_setup_hooks(&scanning_callback);
   // we are done
   setup = 1;
