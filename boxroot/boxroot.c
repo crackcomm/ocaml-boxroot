@@ -20,14 +20,25 @@
 #define CAML_INTERNALS
 
 #include "boxroot.h"
-#include <caml/roots.h>
+#include <caml/compact.h>
 #include <caml/minor_gc.h>
 #include <caml/major_gc.h>
-#include <caml/compact.h>
+#include <caml/roots.h>
+#include <caml/version.h>
 
 #if defined(_POSIX_TIMERS) && defined(_POSIX_MONOTONIC_CLOCK)
 #define POSIX_CLOCK
 #include <time.h>
+#endif
+
+#if OCAML_VERSION >= 50000
+#define OCAML_MULTICORE 1
+#else
+#define OCAML_MULTICORE 0
+#endif
+
+#if OCAML_MULTICORE
+#include <stdatomic.h>
 #endif
 
 /* }}} */
@@ -720,10 +731,14 @@ static void validate_all_pools()
     });
 }
 
+#if OCAML_MULTICORE
+static atomic_int in_minor_collection = 0;
+#else
 static int in_minor_collection = 0;
+#endif
 
 // returns the amount of work done
-static int scan_pool(scanning_action action, pool *pool)
+static int scan_pool(scanning_action action, void *data, pool *pool)
 {
   int allocs_to_find = pool->hd.alloc_count;
   slot *current = pool->roots;
@@ -734,14 +749,19 @@ static int scan_pool(scanning_action action, pool *pool)
       --allocs_to_find;
       value v = (value)s;
       if (DEBUG && Is_block(v) && Is_young(v)) ++stats.young_hit;
+#if OCAML_MULTICORE
+      action(data, v, (value *)current);
+#else
       action(v, (value *)current);
+      (void)data;
+#endif
     }
     ++current;
   }
   return current - pool->roots;
 }
 
-static int scan_pools(scanning_action action)
+static int scan_pools(scanning_action action, void *data)
 {
   int work = 0;
   FOREACH_GLOBAL_RING(global, class, {
@@ -751,17 +771,17 @@ static int scan_pools(scanning_action action)
       if (start_pool == NULL) continue;
       pool *p = start_pool;
       do {
-        work += scan_pool(action, p);
+        work += scan_pool(action, data, p);
         p = p->hd.next;
       } while (p != start_pool);
     });
   return work;
 }
 
-static void scan_roots(scanning_action action)
+static void scan_roots(scanning_action action, void *data)
 {
   if (DEBUG) validate_all_pools();
-  int work = scan_pools(action);
+  int work = scan_pools(action, data);
   if (in_minor_collection) {
     promote_young_pools();
     stats.total_scanning_work_minor += work;
@@ -837,10 +857,11 @@ void boxroot_print_stats()
   printf("POOL_LOG_SIZE: %d (%'d KiB, %'d roots/pool)\n"
          "POOL_ALIGNMENT: %'d kiB\n"
          "DEBUG: %d\n"
+         "OCAML_MULTICORE: %d\n"
          "WITH_EXPECT: 1\n",
          (int)POOL_LOG_SIZE, kib_of_pools((int)1, 1), (int)POOL_ROOTS_CAPACITY,
          kib_of_pools(POOL_ALIGNMENT / POOL_SIZE,1),
-         (int)DEBUG);
+         (int)DEBUG, (int)OCAML_MULTICORE);
 
   printf("total allocated pool: %'d (%'d MiB)\n"
          "peak allocated pools: %'d (%'d MiB)\n"
@@ -900,13 +921,40 @@ void boxroot_print_stats()
 
 /* {{{ Hook setup */
 
+static void scanning_callback(scanning_action action, void *data, void *dom_st);
+
+#if OCAML_MULTICORE
+
+static scan_roots_hook prev_scan_roots_hook;
+
+static void boxroot_scan_hook(scanning_action action, void *data,
+                              caml_domain_state *dom_st)
+{
+  scanning_callback(action, data, (void *)dom_st);
+}
+
+#else
+
 static void (*prev_scan_roots_hook)(scanning_action);
 
-static void scanning_callback(scanning_action action)
+static void boxroot_scan_hook(scanning_action action)
+{
+  scanning_callback(action, NULL, NULL);
+}
+
+#endif // OCAML_MULTICORE
+
+static void scanning_callback(scanning_action action, void *data, void *dom_st)
 {
   if (prev_scan_roots_hook != NULL) {
+#if OCAML_MULTICORE
+    (*prev_scan_roots_hook)(action, data, (caml_domain_state *)dom_st);
+#else
     (*prev_scan_roots_hook)(action);
+    (void)dom_st;
+#endif
   }
+  CRITICAL_SECTION_BEGIN();
   if (in_minor_collection) ++stats.minor_collections;
   else ++stats.major_collections;
   // If no boxroot has been allocated, then scan_roots should not have
@@ -914,10 +962,9 @@ static void scanning_callback(scanning_action action)
   // is also used for other the statistics of other implementations,
   // we further make sure of this with an extra test, by avoiding
   // calling scan_roots if it has only just been initialised.
-  CRITICAL_SECTION_BEGIN();
   if (boxroot_used()) {
     int64_t start = time_counter();
-    scan_roots(action);
+    scan_roots(action, data);
     int64_t duration = time_counter() - start;
     int64_t *total = in_minor_collection ? &stats.total_minor_time : &stats.total_major_time;
     int64_t *peak = in_minor_collection ? &stats.peak_minor_time : &stats.peak_major_time;
@@ -930,19 +977,62 @@ static void scanning_callback(scanning_action action)
 static caml_timing_hook prev_minor_begin_hook = NULL;
 static caml_timing_hook prev_minor_end_hook = NULL;
 
+/* In OCaml 5.0, in_minor_collection records the number of parallel
+   domains currently doing a minor collection.
+
+   Correctness depends on:
+   - The stop-the-world (STW) nature of minor collection, and the fact
+     that the timing hooks are called inside the STW section.
+   - The fact that setup_hooks and scanning_callback are called while
+     holding a domain lock. Thus, setup_hooks is called outside of a
+     minor collection (in_minor_collection starts at 0 correctly), and
+     scanning_callback runs either entirely inside or entirely outside
+     of a STW section.
+*/
+
 static void record_minor_begin()
 {
-  in_minor_collection = 1;
+  in_minor_collection++;
   if (prev_minor_begin_hook != NULL) prev_minor_begin_hook();
 }
 
 static void record_minor_end()
 {
-  in_minor_collection = 0;
+  in_minor_collection--;
   if (prev_minor_end_hook != NULL) prev_minor_end_hook();
 }
 
 static int setup = 0;
+
+#if OCAML_MULTICORE
+
+static void setup_hooks()
+{
+  // save previous hooks and install ours
+  prev_scan_roots_hook = atomic_exchange(&caml_scan_roots_hook,
+                                         boxroot_scan_hook);
+  prev_minor_begin_hook = atomic_exchange(&caml_minor_gc_begin_hook,
+                                          record_minor_begin);
+  prev_minor_end_hook = atomic_exchange(&caml_minor_gc_end_hook,
+                                        record_minor_end);
+}
+
+#else
+
+static void setup_hooks()
+{
+  // save previous hooks
+  prev_scan_roots_hook = caml_scan_roots_hook;
+  prev_minor_begin_hook = caml_minor_gc_begin_hook;
+  prev_minor_end_hook = caml_minor_gc_end_hook;
+  // install our hooks
+  caml_scan_roots_hook = boxroot_scan_hook;
+  caml_minor_gc_begin_hook = record_minor_begin;
+  caml_minor_gc_end_hook = record_minor_end;
+}
+
+#endif // OCAML_MULTICORE
+
 
 // Must be called to set the hook
 int boxroot_setup()
@@ -957,14 +1047,7 @@ int boxroot_setup()
   struct stats empty_stats = {0};
   stats = empty_stats;
   FOREACH_GLOBAL_RING(global, cl, { *global = NULL; });
-  // save previous callbacks
-  prev_scan_roots_hook = caml_scan_roots_hook;
-  prev_minor_begin_hook = caml_minor_gc_begin_hook;
-  prev_minor_end_hook = caml_minor_gc_end_hook;
-  // install our callbacks
-  caml_scan_roots_hook = scanning_callback;
-  caml_minor_gc_begin_hook = record_minor_begin;
-  caml_minor_gc_end_hook = record_minor_end;
+  setup_hooks();
   // we are done
   setup = 1;
   CRITICAL_SECTION_END();
