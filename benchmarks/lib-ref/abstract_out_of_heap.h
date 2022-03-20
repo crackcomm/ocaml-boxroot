@@ -2,16 +2,17 @@
 
 #include "caml/mlvalues.h"
 
-/* code reused or inspired from ocaml/testsuite/tests/gc-roots/globrootsprim.c */
+#define Block_data(b) ((value *)(b & ~((value)1)))
 
-struct block { value header; value v; };
+inline value alloc_abstract_block(void)
+{
+  value *b = malloc(sizeof(value));
+  return (value)b | (value)1;
+}
 
-#define Block_val(r) ((struct block*) &((value*) r)[-1])
-#define Val_block(b) ((value) &((b)->v))
-
-struct block *alloc_abstract_block(void);
-void free_abstract_block (struct block *);
-
-#define Block_data(b) &((b)->v)
+inline void free_abstract_block(value b)
+{
+  free(Block_data(b));
+}
 
 #endif // ABSTRACT_OUT_OF_HEAP_H

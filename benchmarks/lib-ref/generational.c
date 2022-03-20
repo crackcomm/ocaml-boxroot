@@ -8,26 +8,28 @@
 
 typedef value ref;
 
-ref generational_ref_create(value v) {
-    struct block *b = alloc_abstract_block();
-    *(Block_data(b)) = v;
-    caml_register_generational_global_root(Block_data(b));
-    return Val_block(b);
+ref generational_ref_create(value v)
+{
+  value b = alloc_abstract_block();
+  *(Block_data(b)) = v;
+  caml_register_generational_global_root(Block_data(b));
+  return b;
 }
 
-value generational_ref_get(ref r) {
-    return Block_val(r)->v;
+value generational_ref_get(ref r)
+{
+  return *Block_data(r);
 }
 
-value generational_ref_modify(ref r, value v) {
-    struct block *b = Block_val(r);
-    caml_modify_generational_global_root(Block_data(b), v);
-    return Val_unit;
+value generational_ref_modify(ref r, value v)
+{
+  caml_modify_generational_global_root(Block_data(r), v);
+  return Val_unit;
 }
 
-value generational_ref_delete(ref r) {
-    struct block *b = Block_val(r);
-    caml_remove_generational_global_root(Block_data(b));
-    free_abstract_block(b);
-    return Val_unit;
+value generational_ref_delete(ref r)
+{
+  caml_remove_generational_global_root(Block_data(r));
+  free_abstract_block(r);
+  return Val_unit;
 }
