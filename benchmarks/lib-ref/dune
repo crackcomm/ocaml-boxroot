@@ -10,7 +10,7 @@
       ../../dll_boxroot/dll_boxroot.h
     )
     (names
-      abstract_out_of_heap
+      tagged_out_of_heap
       gc
       boxroot
       dll_boxroot

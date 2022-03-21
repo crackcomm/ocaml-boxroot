@@ -10,7 +10,7 @@ external create : 'a -> 'a t = "gc_ref_create"
 
 let get r = r.contents
 
-let modify r v = r.contents <- v
+let modify a i v = a.(i).contents <- v
 
 let delete r = r.contents <- Obj.magic ()
 
