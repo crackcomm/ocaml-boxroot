@@ -62,10 +62,15 @@ let impl =
     exit 2
 
 let n =
-  try int_of_string (Sys.getenv "N") with
-  | _ ->
-    Printf.eprintf "We expect an environment variable N, whose value is an integer";
+  let fail () =
+    Printf.eprintf "We expect an environment variable N, whose value \
+                    is a positive integer.";
     exit 2
+  in
+  match int_of_string (Sys.getenv "N") with
+  | n when n < 1 -> fail ()
+  | n -> n
+  | exception _ -> fail ()
 
 let show_stats =
   match Sys.getenv "STATS" with
@@ -75,13 +80,15 @@ let show_stats =
 
 let () =
   impl.setup ();
-  Printf.printf "local_roots(ROOT=%-*s, N=%s): %!"
+  Printf.printf "local_roots(ROOT=%-*s, N=%n): %!"
     (List.fold_left max 0 (List.map String.length (List.map fst implementations)))
-    (Sys.getenv "ROOT") (Sys.getenv "N");
+    (Sys.getenv "ROOT") n;
   let fixpoint = impl.fixpoint in
-  for _i = 1 to (100_000_000 / (max 1 n)) do
+  let num_iter = 100_000_000 / n in
+  for _i = 1 to num_iter do
     ignore (fixpoint (fun x -> if truncate x >= n then x else x +. 1.) 1.)
   done;
-  Printf.printf "%.2fs\n%!" (Sys.time ());
+  let time_ns = (Sys.time () *. 1E9) /. (float_of_int num_iter) in
+  Printf.printf "%8.2fns\n%!" time_ns;
   if show_stats then impl.stats ();
   impl.teardown ();

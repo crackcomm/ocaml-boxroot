@@ -20,8 +20,9 @@ value global_ref_get(ref r)
   return *(Block_data(r));
 }
 
-value global_ref_modify(ref r, value v)
+value global_ref_modify(value a, value i, value v)
 {
+  ref r = Field(a, Long_val(i));
   *Block_data(r) = v;
   return Val_unit;
 }

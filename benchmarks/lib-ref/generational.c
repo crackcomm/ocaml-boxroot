@@ -21,8 +21,9 @@ value generational_ref_get(ref r)
   return *Block_data(r);
 }
 
-value generational_ref_modify(ref r, value v)
+value generational_ref_modify(value a, value i, value v)
 {
+  ref r = Field(a, Long_val(i));
   caml_modify_generational_global_root(Block_data(r), v);
   return Val_unit;
 }

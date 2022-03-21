@@ -22,7 +22,9 @@ value gc_ref_delete(ref r) {
     return Val_unit;
 }
 
-value gc_ref_modify(ref r, value v) {
-    caml_modify(&Field(r, 0), v);
-    return Val_unit;
+value gc_ref_modify(value a, value i, value v)
+{
+  ref r = Field(a, Long_val(i));
+  caml_modify(&Field(r, 0), v);
+  return Val_unit;
 }

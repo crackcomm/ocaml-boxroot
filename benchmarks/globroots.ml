@@ -34,10 +34,10 @@ module MakeTest(G: Ref.Config.Ref) = struct
         Gc.minor()
     | 5|6|7|8|9|10|11|12 ->             (* update with young value *)
         let i = Random.int size in
-        G.modify a.(i) (Int.to_string i)
+        G.modify a i (Int.to_string i)
     | 13|14|15|16|17|18|19|20 ->        (* update with old value *)
         let i = Random.int size in
-        G.modify a.(i) vals.(i)
+        G.modify a i vals.(i)
     | 21|22|23|24|25|26|27|28 ->        (* re-register young value *)
         let i = Random.int size in
         G.delete a.(i);

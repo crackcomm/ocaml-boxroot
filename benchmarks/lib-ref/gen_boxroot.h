@@ -29,10 +29,12 @@ value MY(boxroot_ref_delete)(ref r)
   return Val_unit;
 }
 
-value MY(boxroot_ref_modify)(ref *r, value v)
+value MY(boxroot_ref_modify)(value a, value i, value v)
 {
+  ref *r = &Field(a, Long_val(i));
   MY(boxroot) b = Boxroot_val(*r);
   MY(boxroot_modify)(&b, v);
+  /* Replacing an immediate with an immediate */
   *r = (value)b | (value)1;
   return Val_unit;
 }

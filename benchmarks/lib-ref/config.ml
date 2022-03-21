@@ -2,7 +2,7 @@ module type Ref = sig
   type 'a t
   val create : 'a -> 'a t
   val get : 'a t -> 'a
-  val modify : 'a t -> 'a -> unit
+  val modify : 'a t array -> int -> 'a -> unit
   val delete : 'a t -> unit
 
   val setup : unit -> unit
