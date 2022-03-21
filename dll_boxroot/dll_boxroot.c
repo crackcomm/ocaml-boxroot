@@ -72,7 +72,7 @@ static struct {
   ring free;
 } rings;
 
-void validate_all_rings();
+static void validate_all_rings();
 
 struct stats {
   int minor_collections;
@@ -243,25 +243,25 @@ void dll_boxroot_modify(dll_boxroot *root, value new_value)
 
 static int in_minor_collection = 0;
 
-void validate_young_ring() {
+static void validate_young_ring() {
   // nothing to check: the young ring
   // may contain both new and old values
   // (including NULL, if roots are used from C)
 }
 
-void validate_old_ring() {
+static void validate_old_ring() {
   FOREACH_ELEM_IN_RING(elem, rings.old, {
     assert(!is_young_block(elem->slot));
   });
 }
 
-void validate_free_ring() {
+static void validate_free_ring() {
   FOREACH_ELEM_IN_RING(elem, rings.free, {
     assert(elem->slot == (value)NULL);
   });
 }
 
-void validate_all_rings() {
+static void validate_all_rings() {
   struct stats stats_before = stats;
   validate_young_ring();
   validate_old_ring();
