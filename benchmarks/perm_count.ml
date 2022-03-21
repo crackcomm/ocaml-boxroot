@@ -44,7 +44,11 @@ let n =
     Printf.ksprintf failwith "We expected an environment variable N with an integer value."
 
 let () =
+  Ref.Config.Ref.setup ();
   Printf.printf "%s: %!" Ref.Config.implem_name;
   let count = count_permutations n in
   Printf.printf "%.2fs\n%!" (Sys.time ());
   Printf.printf "count: %Ld\n%!" count;
+  if Ref.Config.show_stats then
+    Ref.Config.Ref.print_stats ();
+  Ref.Config.Ref.teardown ();

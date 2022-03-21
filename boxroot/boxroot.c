@@ -41,16 +41,18 @@
    additional statistics? (slow)
    This can also be enabled by defining the macro BOXROOT_DEBUG.
    Recommended: 0. */
+#if defined(BOXROOT_DEBUG) && (BOXROOT_DEBUG == 1)
+#define DEBUG 1
+#define DEBUGassert(x) assert(x)
+#else
 #define DEBUG 0
+#define DEBUGassert(x) ((void)0)
+#endif
 
 /* }}} */
 
 /* {{{ Setup */
 
-#ifdef BOXROOT_DEBUG
-#undef DEBUG
-#define DEBUG 1
-#endif
 
 #define POOL_SIZE ((size_t)1 << POOL_LOG_SIZE)
 #define POOL_ALIGNMENT POOL_SIZE
@@ -281,10 +283,10 @@ static pool * ring_pop(pool **target)
   assert(front);
   if (front->hd.next == front) {
     *target = NULL;
-    return front;
+  } else {
+    *target = front->hd.next;
+    ring_link(front->hd.prev, front->hd.next);
   }
-  ring_link(front->hd.prev, front->hd.next);
-  *target = front->hd.next;
   ring_link(front, front);
   return front;
 }
@@ -626,7 +628,7 @@ void boxroot_delete(boxroot root)
 {
   CRITICAL_SECTION_BEGIN();
   slot *s = (slot *)root;
-  CAMLassert(s);
+  DEBUGassert(s);
   if (DEBUG) ++stats.total_delete;
   free_slot(s, get_pool_header(s));
   CRITICAL_SECTION_END();
@@ -651,7 +653,7 @@ void boxroot_modify(boxroot *root, value new_value)
 {
   CRITICAL_SECTION_BEGIN();
   slot *s = (slot *)*root;
-  CAMLassert(s);
+  DEBUGassert(s);
   if (DEBUG) ++stats.total_modify;
   int is_new_young_block = is_young_block(new_value);
   pool *p;

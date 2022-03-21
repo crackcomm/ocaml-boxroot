@@ -229,6 +229,10 @@ let n =
     Printf.ksprintf failwith "We expected an environment variable N with an integer value."
 
 let () =
+  Ref.setup ();
   Printf.printf "%s: %!" Ref_config.implem_name;
   run n;
   Printf.printf "%.2fs\n%!" (Sys.time ());
+  if Ref_config.show_stats then
+    Ref.print_stats ();
+  Ref.teardown ();
