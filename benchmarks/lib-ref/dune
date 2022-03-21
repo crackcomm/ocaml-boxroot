@@ -2,12 +2,12 @@
   (name ref)
   (foreign_archives
      ../../boxroot/boxroot
-     ../../dll_boxroot/dll_boxroot
+     ../../boxroot/dll_boxroot
   )
   (foreign_stubs (language c)
     (extra_deps
       ../../boxroot/boxroot.h
-      ../../dll_boxroot/dll_boxroot.h
+      ../../boxroot/dll_boxroot.h
     )
     (names
       tagged_out_of_heap

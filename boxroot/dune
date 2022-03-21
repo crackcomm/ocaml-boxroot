@@ -5,4 +5,9 @@
  (flags -DENABLE_BOXROOT_MUTEX=%{env:ENABLE_BOXROOT_MUTEX=0})
 )
 
-
+(foreign_library
+ (archive_name dll_boxroot)
+ (language c)
+ (names dll_boxroot)
+ (flags -DENABLE_BOXROOT_MUTEX=%{env:ENABLE_BOXROOT_MUTEX=0})
+)
