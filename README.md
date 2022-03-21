@@ -54,13 +54,13 @@ type Ref containing a single value with an imperative interface
 
 - `ocaml`: an OCaml implementation using a mutable record, with
   deletion implemented by assigning `()` using Obj.magic.
-- `gc`: a C implementation using `caml_alloc_small(1,0)`,
-- `boxroot`: an abstract block (in the OCaml heap) containing a
-  `boxroot`,
-- `global`: an abstract block (allocated outside the OCaml heap)
-  containing a global root, and
-- `generational`: an abstract block (outside the heap) containing a
-  generational global root.
+- `gc`: a C implementation of the previous using
+  `caml_alloc_small(1,0)`,
+- `boxroot`: a `boxroot` disguised as an immediate,
+- `global`: a block allocated outside the OCaml heap (disguised as an
+  immediate) containing a global root, and
+- `generational`: like the previous one, but using a generational
+  global root.
 
 The various implementations have similar memory representation, some
 on the heap and some outside of the heap.

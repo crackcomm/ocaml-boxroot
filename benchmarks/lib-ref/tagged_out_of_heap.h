@@ -4,13 +4,13 @@
 
 #define Block_data(b) ((value *)(b & ~((value)1)))
 
-inline value alloc_abstract_block(void)
+inline value alloc_tagged_block(void)
 {
   value *b = malloc(sizeof(value));
   return (value)b | (value)1;
 }
 
-inline void free_abstract_block(value b)
+inline void free_tagged_block(value b)
 {
   free(Block_data(b));
 }
