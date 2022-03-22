@@ -20,7 +20,6 @@
   (name local_roots)
   (foreign_archives
      ../boxroot/boxroot
-     ../boxroot/dll_boxroot
   )
   (foreign_stubs (language c)
     (extra_deps
