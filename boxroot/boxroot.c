@@ -452,13 +452,12 @@ static void pool_reclassify(pool *p, occupancy occ)
 
 static void try_demote_pool(pool *p)
 {
-  occupancy occ = demotion_occupancy(p);
-  if (occ == NO_CHANGE) return;
-  if (occ != EMPTY &&
-      (p == pools.young_available || p == pools.old_available)) {
-    // Ignore the pool currently used for allocation unless it is empty.
+  if (p == pools.young_available || p == pools.old_available) {
+    // Ignore the pool currently used for allocation.
     return;
   }
+  occupancy occ = demotion_occupancy(p);
+  if (occ == NO_CHANGE) return;
   pool_remove(p);
   if (occ == EMPTY) p->hd.class = UNTRACKED;
   pool_reclassify(p, occ);
