@@ -13,6 +13,9 @@ Working version
 
 ### Packaging
 
+- Minor improvements.
+  (Guillaume Munch-Maccagnoni)
+
 
 ocaml-boxroot 0.2
 =================
