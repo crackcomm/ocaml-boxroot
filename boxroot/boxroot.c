@@ -365,7 +365,7 @@ static void free_all_pools()
 #define DEALLOC_THRESHOLD_SIZE ((int)1 << DEALLOC_THRESHOLD_SIZE_LOG)
 /* The pool is divided in NUM_DEALLOC_THRESHOLD parts of equal size
    DEALLOC_THRESHOLD_SIZE. */
-#define NUM_DEALLOC_THRESHOLD (POOL_SIZE / (DEALLOC_THRESHOLD_SIZE * sizeof(slot)))
+#define NUM_DEALLOC_THRESHOLD ((int)(POOL_SIZE / (DEALLOC_THRESHOLD_SIZE * sizeof(slot))))
 /* Old pools become candidate for young allocation below
    LOW_COUNT_THRESHOLD / NUM_DEALLOC_THRESHOLD occupancy. This tries
    to guarantee that minor scanning hits a good proportion of young
@@ -402,8 +402,8 @@ static int get_threshold(int alloc_count)
 
 static occupancy promotion_occupancy(pool *p)
 {
+  if (p->hd.alloc_count == 0) return EMPTY;
   int threshold = get_threshold(p->hd.alloc_count);
-  if (threshold == 0) return EMPTY;
   if (threshold <= LOW_COUNT_THRESHOLD) return LOW;
   if (threshold <= HIGH_COUNT_THRESHOLD) return HIGH;
   return QUASI_FULL;
@@ -412,8 +412,8 @@ static occupancy promotion_occupancy(pool *p)
 static occupancy demotion_occupancy(pool *p)
 {
   assert(is_alloc_threshold(p->hd.alloc_count));
+  if (p->hd.alloc_count == 0) return EMPTY;
   int threshold = get_threshold(p->hd.alloc_count);
-  if (threshold == 0) return EMPTY;
   if (threshold == LOW_COUNT_THRESHOLD && p->hd.class == OLD) return LOW;
   if (threshold == HIGH_COUNT_THRESHOLD) return HIGH;
   return NO_CHANGE;
