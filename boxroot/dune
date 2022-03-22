@@ -2,5 +2,7 @@
  (archive_name boxroot)
  (language c)
  (names boxroot dll_boxroot ocaml_hooks)
- (flags -DENABLE_BOXROOT_MUTEX=%{env:ENABLE_BOXROOT_MUTEX=0})
+ (flags -DENABLE_BOXROOT_MUTEX=%{env:ENABLE_BOXROOT_MUTEX=0}
+        -Wall -Wshadow -Wpointer-arith -Wcast-qual -Wsign-compare
+        -O2 -fno-strict-aliasing)
 )

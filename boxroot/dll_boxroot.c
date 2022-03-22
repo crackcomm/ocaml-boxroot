@@ -153,14 +153,14 @@ static ring ring_pop_elem(ring elem)
   return prev;
 }
 
-void free_ring(ring ring) {
-  if (ring == NULL) return;
-  struct elem *cur = ring;
+void free_ring(ring r) {
+  if (r == NULL) return;
+  struct elem *cur = r;
   do {
     struct elem *next = cur->next;
     free(cur);
     cur = next;
-  } while (cur != ring);
+  } while (cur != r);
 }
 /* }}} */
 
@@ -268,11 +268,11 @@ static void validate_all_rings() {
 }
 
 // returns the amount of work done
-static int scan_ring(scanning_action action, void *data, ring ring)
+static int scan_ring(scanning_action action, void *data, ring r)
 {
-  if (ring == NULL) return 0;
+  if (r == NULL) return 0;
   int work = 0;
-  FOREACH_ELEM_IN_RING(elem, ring, {
+  FOREACH_ELEM_IN_RING(elem, r, {
     CALL_GC_ACTION(action, data, elem->slot, &elem->slot);
     work++;
   });

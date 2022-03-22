@@ -148,6 +148,7 @@ static const class global_ring_classes[] =
       pool **global_ring = *b__i;                                       \
       class cl = global_ring_classes[b__i - b__st];                     \
       action;                                                           \
+      (void)cl;                                                         \
     }                                                                   \
   } while (0)
 
@@ -263,8 +264,8 @@ static void ring_push_back(pool *source, pool **target)
   if (*target == NULL) {
     *target = source;
     if (DEBUG) {
-      FOREACH_GLOBAL_RING(global, class, {
-          assert(target != global || source->hd.class == class);
+      FOREACH_GLOBAL_RING(global, cl, {
+          assert(target != global || source->hd.class == cl);
         });
     }
   } else {
@@ -440,6 +441,8 @@ static void pool_reclassify(pool *p, occupancy occ)
     break;
   case QUASI_FULL:
     target = is_young ? &pools.young_full : &pools.old_full;
+    break;
+  case NO_CHANGE:
     break;
   }
   // Add at the end instead of in front, since pools which have been
@@ -672,44 +675,44 @@ void boxroot_modify(boxroot *root, value new_value)
 
 /* {{{ Scanning */
 
-static void validate_pool(pool *pool)
+static void validate_pool(pool *pl)
 {
-  if (pool->hd.free_list == NULL) {
+  if (pl->hd.free_list == NULL) {
     // an unintialised pool
-    assert(pool->hd.class == UNTRACKED);
+    assert(pl->hd.class == UNTRACKED);
     return;
   }
   // check freelist structure and length
-  slot *curr = pool->hd.free_list;
+  slot *curr = pl->hd.free_list;
   int pos = 0;
-  for (; !is_empty_free_list(curr, pool); curr = (slot*)*curr, pos++)
+  for (; !is_empty_free_list(curr, pl); curr = (slot*)*curr, pos++)
   {
     assert(pos < POOL_ROOTS_CAPACITY);
-    assert(curr >= pool->roots && curr < pool->roots + POOL_ROOTS_CAPACITY);
+    assert(curr >= pl->roots && curr < pl->roots + POOL_ROOTS_CAPACITY);
   }
-  assert(pos == POOL_ROOTS_CAPACITY - pool->hd.alloc_count);
+  assert(pos == POOL_ROOTS_CAPACITY - pl->hd.alloc_count);
   // check count of allocated elements
   int alloc_count = 0;
   for(int i = 0; i < POOL_ROOTS_CAPACITY; i++) {
-    slot s = pool->roots[i];
+    slot s = pl->roots[i];
     --stats.is_pool_member;
-    if (!is_pool_member(s, pool)) {
+    if (!is_pool_member(s, pl)) {
       value v = (value)s;
-      if (pool->hd.class != YOUNG) assert(!Is_block(v) || !Is_young(v));
+      if (pl->hd.class != YOUNG) assert(!Is_block(v) || !Is_young(v));
       ++alloc_count;
     }
   }
-  assert(alloc_count == pool->hd.alloc_count);
+  assert(alloc_count == pl->hd.alloc_count);
 }
 
 static void validate_all_pools()
 {
-  FOREACH_GLOBAL_RING(global, class, {
+  FOREACH_GLOBAL_RING(global, cl, {
       pool *start_pool = *global;
       if (start_pool == NULL) continue;
       pool *p = start_pool;
       do {
-        assert(p->hd.class == class);
+        assert(p->hd.class == cl);
         validate_pool(p);
         assert(p->hd.next != NULL);
         assert(p->hd.next->hd.prev == p);
@@ -721,14 +724,14 @@ static void validate_all_pools()
 }
 
 // returns the amount of work done
-static int scan_pool(scanning_action action, void *data, pool *pool)
+static int scan_pool(scanning_action action, void *data, pool *pl)
 {
-  int allocs_to_find = pool->hd.alloc_count;
-  slot *current = pool->roots;
+  int allocs_to_find = pl->hd.alloc_count;
+  slot *current = pl->roots;
   while (allocs_to_find) {
     // hot path
     slot s = *current;
-    if (LIKELY((!is_pool_member(s, pool)))) {
+    if (LIKELY((!is_pool_member(s, pl)))) {
       --allocs_to_find;
       value v = (value)s;
       if (DEBUG && Is_block(v) && Is_young(v)) ++stats.young_hit;
@@ -736,15 +739,15 @@ static int scan_pool(scanning_action action, void *data, pool *pool)
     }
     ++current;
   }
-  return current - pool->roots;
+  return current - pl->roots;
 }
 
 static int scan_pools(scanning_action action, void *data)
 {
   int work = 0;
-  FOREACH_GLOBAL_RING(global, class, {
-      if (class == UNTRACKED || (boxroot_private_in_minor_collection()
-                                 && class == OLD))
+  FOREACH_GLOBAL_RING(global, cl, {
+      if (cl == UNTRACKED || (boxroot_private_in_minor_collection()
+                                 && cl == OLD))
         continue;
       pool *start_pool = *global;
       if (start_pool == NULL) continue;
@@ -804,8 +807,8 @@ static int average(long long total_work, int nb_collections)
 
 static int boxroot_used()
 {
-  FOREACH_GLOBAL_RING (global, class, {
-      if (class == UNTRACKED) continue;
+  FOREACH_GLOBAL_RING (global, cl, {
+      if (cl == UNTRACKED) continue;
       pool *p = *global;
       if (p != NULL && (p->hd.alloc_count != 0 || p->hd.next != p)) {
         return 1;
