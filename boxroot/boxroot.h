@@ -43,7 +43,8 @@ void boxroot_modify(boxroot *, value);
 /* The behaviour of the above functions is well-defined only after the
    allocator has been initialised with `boxroot_setup`, which must be
    called after OCaml startup, and before it has released its
-   resources with `boxroot_teardown`. */
+   resources with `boxroot_teardown`, which can be called after OCaml
+   shutdown. */
 int boxroot_setup();
 void boxroot_teardown();
 

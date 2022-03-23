@@ -1,14 +1,21 @@
-working version
+Working version
 ===============
 
 ### General changes
 
+- Add support for OCaml 5.0 (Multicore).
+  (Guillaume Munch-Maccagnoni)
+
 ### Internal changes
 
-- Benchmark improvements
+- Benchmark improvements.
   (Gabriel Scherer, Guillaume Munch-Maccagnoni)
 
 ### Packaging
+
+- Minor improvements.
+  (Guillaume Munch-Maccagnoni)
+
 
 ocaml-boxroot 0.2
 =================

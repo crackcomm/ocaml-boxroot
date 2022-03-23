@@ -20,15 +20,15 @@
 #define CAML_INTERNALS
 
 #include "dll_boxroot.h"
-#include <caml/roots.h>
 #include <caml/minor_gc.h>
 #include <caml/major_gc.h>
-#include <caml/compact.h>
 
 #if defined(_POSIX_TIMERS) && defined(_POSIX_MONOTONIC_CLOCK)
 #define POSIX_CLOCK
 #include <time.h>
 #endif
+
+#include "ocaml_hooks.h"
 
 /* }}} */
 
@@ -153,14 +153,14 @@ static ring ring_pop_elem(ring elem)
   return prev;
 }
 
-void free_ring(ring ring) {
-  if (ring == NULL) return;
-  struct elem *cur = ring;
+void free_ring(ring r) {
+  if (r == NULL) return;
+  struct elem *cur = r;
   do {
     struct elem *next = cur->next;
     free(cur);
     cur = next;
-  } while (cur != ring);
+  } while (cur != r);
 }
 /* }}} */
 
@@ -241,8 +241,6 @@ void dll_boxroot_modify(dll_boxroot *root, value new_value)
 
 /* {{{ Scanning */
 
-static int in_minor_collection = 0;
-
 static void validate_young_ring() {
   // nothing to check: the young ring
   // may contain both new and old values
@@ -270,28 +268,28 @@ static void validate_all_rings() {
 }
 
 // returns the amount of work done
-static int scan_ring(scanning_action action, ring ring)
+static int scan_ring(scanning_action action, void *data, ring r)
 {
-  if (ring == NULL) return 0;
+  if (r == NULL) return 0;
   int work = 0;
-  FOREACH_ELEM_IN_RING(elem, ring, {
-    action(elem->slot, &elem->slot);
+  FOREACH_ELEM_IN_RING(elem, r, {
+    CALL_GC_ACTION(action, data, elem->slot, &elem->slot);
     work++;
   });
   return work;
 }
 
-static void scan_roots(scanning_action action)
+static void scan_roots(scanning_action action, void *data)
 {
   int work = 0;
   if (DEBUG) validate_all_rings();
-  work += scan_ring(action, rings.young);
-  if (in_minor_collection) {
+  work += scan_ring(action, data, rings.young);
+  if (boxroot_in_minor_collection()) {
     ring_push_back(rings.young, &rings.old);
     rings.young = NULL;
     stats.total_scanning_work_minor += work;
   } else {
-    work += scan_ring(action, rings.old);
+    work += scan_ring(action, data, rings.old);
     free_ring(rings.free);
     rings.free = NULL;
     stats.total_scanning_work_major += work;
@@ -369,17 +367,16 @@ void dll_boxroot_print_stats()
 
 /* {{{ Hook setup */
 
-static void (*prev_scan_roots_hook)(scanning_action);
+static int setup = 0;
 
-static void scanning_callback(scanning_action action)
+static void scanning_callback(scanning_action action, void *data)
 {
-  if (prev_scan_roots_hook != NULL) {
-    (*prev_scan_roots_hook)(action);
-  }
+  if (!setup) return;
+  int in_minor_collection = boxroot_in_minor_collection();
   if (in_minor_collection) ++stats.minor_collections;
   else ++stats.major_collections;
   int64_t start = time_counter();
-  scan_roots(action);
+  scan_roots(action, data);
   int64_t duration = time_counter() - start;
   int64_t *total = in_minor_collection ? &stats.total_minor_time : &stats.total_major_time;
   int64_t *peak = in_minor_collection ? &stats.peak_minor_time : &stats.peak_major_time;
@@ -387,42 +384,17 @@ static void scanning_callback(scanning_action action)
   if (duration > *peak) *peak = duration;
 }
 
-static caml_timing_hook prev_minor_begin_hook = NULL;
-static caml_timing_hook prev_minor_end_hook = NULL;
-
-static void record_minor_begin()
-{
-  in_minor_collection = 1;
-  if (prev_minor_begin_hook != NULL) prev_minor_begin_hook();
-}
-
-static void record_minor_end()
-{
-  in_minor_collection = 0;
-  if (prev_minor_end_hook != NULL) prev_minor_end_hook();
-}
-
-static int setup = 0;
-
-// Must be called to set the hook
+// Must be called to set the hook before using boxroot
 int dll_boxroot_setup()
 {
   if (setup) return 0;
   // initialise globals
-  in_minor_collection = 0;
   struct stats empty_stats = {0};
   stats = empty_stats;
   rings.young = NULL;
   rings.old = NULL;
   rings.free = NULL;
-  // save previous callbacks
-  prev_scan_roots_hook = caml_scan_roots_hook;
-  prev_minor_begin_hook = caml_minor_gc_begin_hook;
-  prev_minor_end_hook = caml_minor_gc_end_hook;
-  // install our callbacks
-  caml_scan_roots_hook = scanning_callback;
-  caml_minor_gc_begin_hook = record_minor_begin;
-  caml_minor_gc_end_hook = record_minor_end;
+  boxroot_setup_hooks(&scanning_callback);
   // we are done
   setup = 1;
   if (DEBUG) validate_all_rings();
@@ -432,17 +404,13 @@ int dll_boxroot_setup()
 void dll_boxroot_teardown()
 {
   if (!setup) return;
-  // restore callbacks
-  caml_scan_roots_hook = prev_scan_roots_hook;
-  caml_minor_gc_begin_hook = prev_minor_begin_hook;
-  caml_minor_gc_end_hook = prev_minor_end_hook;
+  setup = 0;
   free_ring(rings.young);
   rings.young = NULL;
   free_ring(rings.old);
   rings.old = NULL;
   free_ring(rings.free);
   rings.free = NULL;
-  setup = 0;
 }
 
 /* }}} */

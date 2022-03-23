@@ -4,6 +4,7 @@ fn build_boxroot(ocaml_path: &str) {
     config.include(ocaml_path);
     config.include("vendor/boxroot/");
     config.file("vendor/boxroot/boxroot.c");
+    config.file("vendor/boxroot/ocaml_hooks.c");
 
     config.compile("libocaml-boxroot.a");
 }
@@ -65,6 +66,8 @@ fn link_runtime(
 fn main() {
     println!("cargo:rerun-if-changed=vendor/boxroot/boxroot.c");
     println!("cargo:rerun-if-changed=vendor/boxroot/boxroot.h");
+    println!("cargo:rerun-if-changed=vendor/boxroot/ocaml_hook.c");
+    println!("cargo:rerun-if-changed=vendor/boxroot/ocaml_hook.h");
     println!("cargo:rerun-if-env-changed=OCAMLOPT");
     println!("cargo:rerun-if-env-changed=OCAML_WHERE_PATH");
 

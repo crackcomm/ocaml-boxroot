@@ -20,15 +20,15 @@
 #define CAML_INTERNALS
 
 #include "boxroot.h"
-#include <caml/roots.h>
 #include <caml/minor_gc.h>
 #include <caml/major_gc.h>
-#include <caml/compact.h>
 
 #if defined(_POSIX_TIMERS) && defined(_POSIX_MONOTONIC_CLOCK)
 #define POSIX_CLOCK
 #include <time.h>
 #endif
+
+#include "ocaml_hooks.h"
 
 /* }}} */
 
@@ -148,6 +148,7 @@ static const class global_ring_classes[] =
       pool **global_ring = *b__i;                                       \
       class cl = global_ring_classes[b__i - b__st];                     \
       action;                                                           \
+      (void)cl;                                                         \
     }                                                                   \
   } while (0)
 
@@ -263,8 +264,8 @@ static void ring_push_back(pool *source, pool **target)
   if (*target == NULL) {
     *target = source;
     if (DEBUG) {
-      FOREACH_GLOBAL_RING(global, class, {
-          assert(target != global || source->hd.class == class);
+      FOREACH_GLOBAL_RING(global, cl, {
+          assert(target != global || source->hd.class == cl);
         });
     }
   } else {
@@ -365,7 +366,7 @@ static void free_all_pools()
 #define DEALLOC_THRESHOLD_SIZE ((int)1 << DEALLOC_THRESHOLD_SIZE_LOG)
 /* The pool is divided in NUM_DEALLOC_THRESHOLD parts of equal size
    DEALLOC_THRESHOLD_SIZE. */
-#define NUM_DEALLOC_THRESHOLD (POOL_SIZE / (DEALLOC_THRESHOLD_SIZE * sizeof(slot)))
+#define NUM_DEALLOC_THRESHOLD ((int)(POOL_SIZE / (DEALLOC_THRESHOLD_SIZE * sizeof(slot))))
 /* Old pools become candidate for young allocation below
    LOW_COUNT_THRESHOLD / NUM_DEALLOC_THRESHOLD occupancy. This tries
    to guarantee that minor scanning hits a good proportion of young
@@ -402,8 +403,8 @@ static int get_threshold(int alloc_count)
 
 static occupancy promotion_occupancy(pool *p)
 {
+  if (p->hd.alloc_count == 0) return EMPTY;
   int threshold = get_threshold(p->hd.alloc_count);
-  if (threshold == 0) return EMPTY;
   if (threshold <= LOW_COUNT_THRESHOLD) return LOW;
   if (threshold <= HIGH_COUNT_THRESHOLD) return HIGH;
   return QUASI_FULL;
@@ -412,8 +413,8 @@ static occupancy promotion_occupancy(pool *p)
 static occupancy demotion_occupancy(pool *p)
 {
   assert(is_alloc_threshold(p->hd.alloc_count));
+  if (p->hd.alloc_count == 0) return EMPTY;
   int threshold = get_threshold(p->hd.alloc_count);
-  if (threshold == 0) return EMPTY;
   if (threshold == LOW_COUNT_THRESHOLD && p->hd.class == OLD) return LOW;
   if (threshold == HIGH_COUNT_THRESHOLD) return HIGH;
   return NO_CHANGE;
@@ -440,6 +441,8 @@ static void pool_reclassify(pool *p, occupancy occ)
     break;
   case QUASI_FULL:
     target = is_young ? &pools.young_full : &pools.old_full;
+    break;
+  case NO_CHANGE:
     break;
   }
   // Add at the end instead of in front, since pools which have been
@@ -672,44 +675,44 @@ void boxroot_modify(boxroot *root, value new_value)
 
 /* {{{ Scanning */
 
-static void validate_pool(pool *pool)
+static void validate_pool(pool *pl)
 {
-  if (pool->hd.free_list == NULL) {
+  if (pl->hd.free_list == NULL) {
     // an unintialised pool
-    assert(pool->hd.class == UNTRACKED);
+    assert(pl->hd.class == UNTRACKED);
     return;
   }
   // check freelist structure and length
-  slot *curr = pool->hd.free_list;
+  slot *curr = pl->hd.free_list;
   int pos = 0;
-  for (; !is_empty_free_list(curr, pool); curr = (slot*)*curr, pos++)
+  for (; !is_empty_free_list(curr, pl); curr = (slot*)*curr, pos++)
   {
     assert(pos < POOL_ROOTS_CAPACITY);
-    assert(curr >= pool->roots && curr < pool->roots + POOL_ROOTS_CAPACITY);
+    assert(curr >= pl->roots && curr < pl->roots + POOL_ROOTS_CAPACITY);
   }
-  assert(pos == POOL_ROOTS_CAPACITY - pool->hd.alloc_count);
+  assert(pos == POOL_ROOTS_CAPACITY - pl->hd.alloc_count);
   // check count of allocated elements
   int alloc_count = 0;
   for(int i = 0; i < POOL_ROOTS_CAPACITY; i++) {
-    slot s = pool->roots[i];
+    slot s = pl->roots[i];
     --stats.is_pool_member;
-    if (!is_pool_member(s, pool)) {
+    if (!is_pool_member(s, pl)) {
       value v = (value)s;
-      if (pool->hd.class != YOUNG) assert(!Is_block(v) || !Is_young(v));
+      if (pl->hd.class != YOUNG) assert(!Is_block(v) || !Is_young(v));
       ++alloc_count;
     }
   }
-  assert(alloc_count == pool->hd.alloc_count);
+  assert(alloc_count == pl->hd.alloc_count);
 }
 
 static void validate_all_pools()
 {
-  FOREACH_GLOBAL_RING(global, class, {
+  FOREACH_GLOBAL_RING(global, cl, {
       pool *start_pool = *global;
       if (start_pool == NULL) continue;
       pool *p = start_pool;
       do {
-        assert(p->hd.class == class);
+        assert(p->hd.class == cl);
         validate_pool(p);
         assert(p->hd.next != NULL);
         assert(p->hd.next->hd.prev == p);
@@ -720,49 +723,48 @@ static void validate_all_pools()
     });
 }
 
-static int in_minor_collection = 0;
-
 // returns the amount of work done
-static int scan_pool(scanning_action action, pool *pool)
+static int scan_pool(scanning_action action, void *data, pool *pl)
 {
-  int allocs_to_find = pool->hd.alloc_count;
-  slot *current = pool->roots;
+  int allocs_to_find = pl->hd.alloc_count;
+  slot *current = pl->roots;
   while (allocs_to_find) {
     // hot path
     slot s = *current;
-    if (LIKELY((!is_pool_member(s, pool)))) {
+    if (LIKELY((!is_pool_member(s, pl)))) {
       --allocs_to_find;
       value v = (value)s;
       if (DEBUG && Is_block(v) && Is_young(v)) ++stats.young_hit;
-      action(v, (value *)current);
+      CALL_GC_ACTION(action, data, v, (value *)current);
     }
     ++current;
   }
-  return current - pool->roots;
+  return current - pl->roots;
 }
 
-static int scan_pools(scanning_action action)
+static int scan_pools(scanning_action action, void *data)
 {
   int work = 0;
-  FOREACH_GLOBAL_RING(global, class, {
-      if (class == UNTRACKED || (in_minor_collection && class == OLD))
+  FOREACH_GLOBAL_RING(global, cl, {
+      if (cl == UNTRACKED || (boxroot_in_minor_collection()
+                                 && cl == OLD))
         continue;
       pool *start_pool = *global;
       if (start_pool == NULL) continue;
       pool *p = start_pool;
       do {
-        work += scan_pool(action, p);
+        work += scan_pool(action, data, p);
         p = p->hd.next;
       } while (p != start_pool);
     });
   return work;
 }
 
-static void scan_roots(scanning_action action)
+static void scan_roots(scanning_action action, void *data)
 {
   if (DEBUG) validate_all_pools();
-  int work = scan_pools(action);
-  if (in_minor_collection) {
+  int work = scan_pools(action, data);
+  if (boxroot_in_minor_collection()) {
     promote_young_pools();
     stats.total_scanning_work_minor += work;
   } else {
@@ -805,8 +807,8 @@ static int average(long long total_work, int nb_collections)
 
 static int boxroot_used()
 {
-  FOREACH_GLOBAL_RING (global, class, {
-      if (class == UNTRACKED) continue;
+  FOREACH_GLOBAL_RING (global, cl, {
+      if (cl == UNTRACKED) continue;
       pool *p = *global;
       if (p != NULL && (p->hd.alloc_count != 0 || p->hd.next != p)) {
         return 1;
@@ -837,10 +839,11 @@ void boxroot_print_stats()
   printf("POOL_LOG_SIZE: %d (%'d KiB, %'d roots/pool)\n"
          "POOL_ALIGNMENT: %'d kiB\n"
          "DEBUG: %d\n"
+         "OCAML_MULTICORE: %d\n"
          "WITH_EXPECT: 1\n",
          (int)POOL_LOG_SIZE, kib_of_pools((int)1, 1), (int)POOL_ROOTS_CAPACITY,
          kib_of_pools(POOL_ALIGNMENT / POOL_SIZE,1),
-         (int)DEBUG);
+         (int)DEBUG, (int)OCAML_MULTICORE);
 
   printf("total allocated pool: %'d (%'d MiB)\n"
          "peak allocated pools: %'d (%'d MiB)\n"
@@ -900,13 +903,16 @@ void boxroot_print_stats()
 
 /* {{{ Hook setup */
 
-static void (*prev_scan_roots_hook)(scanning_action);
+static int setup = 0;
 
-static void scanning_callback(scanning_action action)
+static void scanning_callback(scanning_action action, void *data)
 {
-  if (prev_scan_roots_hook != NULL) {
-    (*prev_scan_roots_hook)(action);
+  CRITICAL_SECTION_BEGIN();
+  if (!setup) {
+    CRITICAL_SECTION_END();
+    return;
   }
+  int in_minor_collection = boxroot_in_minor_collection();
   if (in_minor_collection) ++stats.minor_collections;
   else ++stats.major_collections;
   // If no boxroot has been allocated, then scan_roots should not have
@@ -914,10 +920,9 @@ static void scanning_callback(scanning_action action)
   // is also used for other the statistics of other implementations,
   // we further make sure of this with an extra test, by avoiding
   // calling scan_roots if it has only just been initialised.
-  CRITICAL_SECTION_BEGIN();
   if (boxroot_used()) {
     int64_t start = time_counter();
-    scan_roots(action);
+    scan_roots(action, data);
     int64_t duration = time_counter() - start;
     int64_t *total = in_minor_collection ? &stats.total_minor_time : &stats.total_major_time;
     int64_t *peak = in_minor_collection ? &stats.peak_minor_time : &stats.peak_major_time;
@@ -927,24 +932,7 @@ static void scanning_callback(scanning_action action)
   CRITICAL_SECTION_END();
 }
 
-static caml_timing_hook prev_minor_begin_hook = NULL;
-static caml_timing_hook prev_minor_end_hook = NULL;
-
-static void record_minor_begin()
-{
-  in_minor_collection = 1;
-  if (prev_minor_begin_hook != NULL) prev_minor_begin_hook();
-}
-
-static void record_minor_end()
-{
-  in_minor_collection = 0;
-  if (prev_minor_end_hook != NULL) prev_minor_end_hook();
-}
-
-static int setup = 0;
-
-// Must be called to set the hook
+// Must be called to set the hook before using boxroot
 int boxroot_setup()
 {
   CRITICAL_SECTION_BEGIN();
@@ -953,24 +941,17 @@ int boxroot_setup()
     return 0;
   }
   // initialise globals
-  in_minor_collection = 0;
   struct stats empty_stats = {0};
   stats = empty_stats;
   FOREACH_GLOBAL_RING(global, cl, { *global = NULL; });
-  // save previous callbacks
-  prev_scan_roots_hook = caml_scan_roots_hook;
-  prev_minor_begin_hook = caml_minor_gc_begin_hook;
-  prev_minor_end_hook = caml_minor_gc_end_hook;
-  // install our callbacks
-  caml_scan_roots_hook = scanning_callback;
-  caml_minor_gc_begin_hook = record_minor_begin;
-  caml_minor_gc_end_hook = record_minor_end;
+  boxroot_setup_hooks(&scanning_callback);
   // we are done
   setup = 1;
   CRITICAL_SECTION_END();
   return 1;
 }
 
+// This can only be called at OCaml shutdown
 void boxroot_teardown()
 {
   CRITICAL_SECTION_BEGIN();
@@ -978,12 +959,8 @@ void boxroot_teardown()
     CRITICAL_SECTION_END();
     return;
   }
-  // restore callbacks
-  caml_scan_roots_hook = prev_scan_roots_hook;
-  caml_minor_gc_begin_hook = prev_minor_begin_hook;
-  caml_minor_gc_end_hook = prev_minor_end_hook;
-  free_all_pools();
   setup = 0;
+  free_all_pools();
   CRITICAL_SECTION_END();
 }
 

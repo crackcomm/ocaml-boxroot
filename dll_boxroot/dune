@@ -1,7 +1,0 @@
-(foreign_library
- (archive_name dll_boxroot)
- (language c)
- (names dll_boxroot)
-)
-
-

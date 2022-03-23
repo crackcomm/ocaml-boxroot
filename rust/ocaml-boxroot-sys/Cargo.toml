@@ -1,6 +1,6 @@
 [package]
 name = "ocaml-boxroot-sys"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Bruno Deferrari <utizoc@gmail.com>"]
 edition = "2018"
 license = "MIT"
@@ -8,7 +8,16 @@ description = "Bindings for ocaml-boxroot"
 homepage = "https://gitlab.com/ocaml-rust/ocaml-boxroot"
 repository = "https://gitlab.com/ocaml-rust/ocaml-boxroot"
 keywords = ["ocaml", "rust", "ffi"]
-include = ["build.rs", "src/*.rs", "vendor/boxroot/boxroot.c", "vendor/boxroot/boxroot.h", "README.md", "utils/without-ocamlopt/caml/*.h"]
+include = ["build.rs",
+           "src/*.rs",
+           "vendor/boxroot/boxroot.c",
+           "vendor/boxroot/boxroot.h",
+           "vendor/boxroot/ocaml_hooks.c",
+           "vendor/boxroot/ocaml_hooks.h",
+           "vendor/README.md",
+           "vendor/Changes.md",
+           "README.md",
+           "utils/without-ocamlopt/caml/*.h"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

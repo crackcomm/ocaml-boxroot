@@ -147,7 +147,7 @@ value generational_fixpoint(value f, value x)
 
 
 /* same as the 'boxroot' version, but using 'dll_boxroot' instead */
-#include "../dll_boxroot/dll_boxroot.h"
+#include "../boxroot/dll_boxroot.h"
 
 #undef BOX
 #undef GET
