@@ -58,15 +58,17 @@ type Ref containing a single value with an imperative interface
   `caml_alloc_small(1,0)`,
 - `boxroot`: a `boxroot` disguised as an immediate (reference
   implementation described further below),
-- `dll_boxroot`: idem, but using a naive implementation with
-  doubly-linked lists,
 - `global`: a block allocated outside the OCaml heap (disguised as an
   immediate) containing a global root, and
 - `generational`: idem, but using a generational
   global root.
+- `dll_boxroot`: a variant of `boxroot`, but using a "naive"
+  implementation with doubly-linked lists,
+- `rem_boxroot`: a variant of `boxroot`, but using a simpler
+  implementation using OCaml's remembered set.
 
 The various implementations have similar memory representation, some
-on the heap and some outside of the heap.
+on the OCaml heap and some outside of the OCaml heap.
 
 By selecting different implementations of Ref, we can evaluate the
 overhead of root registration and scanning for various root
@@ -95,22 +97,25 @@ This benchmark creates a lot of roots alive at the same time.
 $ make run-perm_count TEST_MORE=1
 Benchmark: perm_count
 ---
-gc: 2.06s            
+gc: 2.17s            
 count: 3628800
 ---
-boxroot: 1.93s       
+boxroot: 2.05s       
 count: 3628800
 ---
-ocaml: 2.03s         
+ocaml: 2.14s         
 count: 3628800
 ---
-dll_boxroot: 2.08s   
+dll_boxroot: 2.15s   
 count: 3628800
 ---
-generational: 5.57s  
+rem_boxroot: 2.04s   
 count: 3628800
 ---
-global: 48.80s       
+generational: 5.59s  
+count: 3628800
+---
+global: 53.79s       
 count: 3628800
 ---
 ```
@@ -148,26 +153,28 @@ long-lived.
 $ make run-synthetic TEST_MORE=1
 Benchmark: synthetic
 ---
-gc: 7.10s            
+gc: 7.30s            
 ---
-boxroot: 5.92s       
+boxroot: 6.18s       
 ---
-ocaml: 7.14s         
+ocaml: 7.21s         
 ---
-dll_boxroot: 6.51s   
+dll_boxroot: 6.63s   
 ---
-generational: 10.98s 
+rem_boxroot: 6.04s   
 ---
-global: 15.60s       
+generational: 11.29s 
+---
+global: 16.38s       
 ---
 ```
 
 Since the boxroot is directly inside a gc-allocated value, our
 benchmarks leave few opportunities for the version using boxroots
-outperforming the versions without roots. The repeatable
-outperformance of non-roots versions by the boxroot version
-in this benchmark could be explained by the greater cache locality
-during scanning.
+outperforming the versions without roots, so the repeatable
+outperformance of non-roots versions by the boxroot version in this
+benchmark is surprising. It could be explained by the greater cache
+locality of pools during scanning.
 
 
 ### Globroot benchmark
@@ -188,17 +195,19 @@ would normally be amortized by OCaml computations.
 ```
 $ make run-globroots TEST_MORE=1
 ---
-gc: 1.66s            
+gc: 1.37s            
 ---
-boxroot: 1.20s       
+boxroot: 1.23s       
 ---
-ocaml: 1.40s         
+ocaml: 1.47s         
 ---
-dll_boxroot: 1.07s   
+dll_boxroot: 1.05s   
 ---
-generational: 1.17s  
+rem_boxroot: 1.13s   
 ---
-global: 1.26s        
+generational: 1.24s  
+---
+global: 1.36s        
 ---
 ```
 
@@ -294,45 +303,53 @@ expected by OCaml `external` declarations to a caller-root convention.
 ```
 Benchmark: local_roots TEST_MORE=1
 ---
-local_roots(ROOT=local       , N=1):    11.74ns
-local_roots(ROOT=boxroot     , N=1):    18.46ns
-local_roots(ROOT=dll_boxroot , N=1):    27.85ns
-local_roots(ROOT=generational, N=1):    47.13ns
+local_roots(ROOT=local       , N=1):    12.31ns
+local_roots(ROOT=boxroot     , N=1):    19.44ns
+local_roots(ROOT=dll_boxroot , N=1):    30.27ns
+local_roots(ROOT=rem_boxroot , N=1):    22.98ns
+local_roots(ROOT=generational, N=1):    48.88ns
 ---
-local_roots(ROOT=local       , N=2):    22.36ns
-local_roots(ROOT=boxroot     , N=2):    29.14ns
-local_roots(ROOT=dll_boxroot , N=2):    42.40ns
-local_roots(ROOT=generational, N=2):    97.71ns
+local_roots(ROOT=local       , N=2):    23.35ns
+local_roots(ROOT=boxroot     , N=2):    29.09ns
+local_roots(ROOT=dll_boxroot , N=2):    44.52ns
+local_roots(ROOT=rem_boxroot , N=2):    35.25ns
+local_roots(ROOT=generational, N=2):   105.56ns
 ---
-local_roots(ROOT=local       , N=3):    32.76ns
-local_roots(ROOT=boxroot     , N=3):    38.89ns
-local_roots(ROOT=dll_boxroot , N=3):    57.97ns
-local_roots(ROOT=generational, N=3):   149.84ns
+local_roots(ROOT=local       , N=3):    34.63ns
+local_roots(ROOT=boxroot     , N=3):    37.63ns
+local_roots(ROOT=dll_boxroot , N=3):    60.24ns
+local_roots(ROOT=rem_boxroot , N=3):    47.30ns
+local_roots(ROOT=generational, N=3):   137.82ns
 ---
-local_roots(ROOT=local       , N=4):    43.61ns
-local_roots(ROOT=boxroot     , N=4):    47.47ns
-local_roots(ROOT=dll_boxroot , N=4):    73.39ns
-local_roots(ROOT=generational, N=4):   174.28ns
+local_roots(ROOT=local       , N=4):    45.30ns
+local_roots(ROOT=boxroot     , N=4):    47.75ns
+local_roots(ROOT=dll_boxroot , N=4):    72.60ns
+local_roots(ROOT=rem_boxroot , N=4):    57.68ns
+local_roots(ROOT=generational, N=4):   174.14ns
 ---
-local_roots(ROOT=local       , N=5):    55.78ns
-local_roots(ROOT=boxroot     , N=5):    57.28ns
-local_roots(ROOT=dll_boxroot , N=5):    88.02ns
-local_roots(ROOT=generational, N=5):   221.34ns
+local_roots(ROOT=local       , N=5):    57.73ns
+local_roots(ROOT=boxroot     , N=5):    56.59ns
+local_roots(ROOT=dll_boxroot , N=5):    90.08ns
+local_roots(ROOT=rem_boxroot , N=5):    69.86ns
+local_roots(ROOT=generational, N=5):   217.36ns
 ---
-local_roots(ROOT=local       , N=10):   110.48ns
-local_roots(ROOT=boxroot     , N=10):   103.57ns
-local_roots(ROOT=dll_boxroot , N=10):   162.87ns
-local_roots(ROOT=generational, N=10):   393.36ns
+local_roots(ROOT=local       , N=10):   117.16ns
+local_roots(ROOT=boxroot     , N=10):   102.86ns
+local_roots(ROOT=dll_boxroot , N=10):   166.69ns
+local_roots(ROOT=rem_boxroot , N=10):   127.74ns
+local_roots(ROOT=generational, N=10):   407.40ns
 ---
-local_roots(ROOT=local       , N=100):  1206.62ns
-local_roots(ROOT=boxroot     , N=100):   959.57ns
-local_roots(ROOT=dll_boxroot , N=100):  1431.10ns
-local_roots(ROOT=generational, N=100):  3635.11ns
+local_roots(ROOT=local       , N=100):  1267.35ns
+local_roots(ROOT=boxroot     , N=100):   954.10ns
+local_roots(ROOT=dll_boxroot , N=100):  1476.02ns
+local_roots(ROOT=rem_boxroot , N=100):  1196.25ns
+local_roots(ROOT=generational, N=100):  3726.56ns
 ---
-local_roots(ROOT=local       , N=1000): 13497.50ns
-local_roots(ROOT=boxroot     , N=1000):  9227.89ns
-local_roots(ROOT=dll_boxroot , N=1000): 14331.72ns
-local_roots(ROOT=generational, N=1000): 35709.90ns
+local_roots(ROOT=local       , N=1000): 13222.97ns
+local_roots(ROOT=boxroot     , N=1000):  8940.01ns
+local_roots(ROOT=dll_boxroot , N=1000): 14795.19ns
+local_roots(ROOT=rem_boxroot , N=1000): 11319.29ns
+local_roots(ROOT=generational, N=1000): 35870.84ns
 ---
 ```
 

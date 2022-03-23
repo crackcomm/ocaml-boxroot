@@ -11,6 +11,9 @@ Working version
 - Benchmark improvements.
   (Gabriel Scherer, Guillaume Munch-Maccagnoni)
 
+- Experiments with alternative implementations.
+  (Gabriel Scherer)
+
 ### Packaging
 
 - Minor improvements.
