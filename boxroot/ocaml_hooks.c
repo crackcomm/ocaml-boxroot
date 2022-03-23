@@ -1,3 +1,6 @@
+#define CAML_NAME_SPACE
+#define CAML_INTERNALS
+
 #include "ocaml_hooks.h"
 
 #include <caml/misc.h>
@@ -36,7 +39,7 @@ static void record_minor_end()
   if (prev_minor_end_hook != NULL) prev_minor_end_hook();
 }
 
-int boxroot_private_in_minor_collection()
+int boxroot_in_minor_collection()
 {
   return in_minor_collection != 0;
 }
@@ -57,7 +60,7 @@ static void boxroot_scan_hook(scanning_action action, void *data,
   (*scanning_callback)(action, data);
 }
 
-void boxroot_private_setup_hooks(boxroot_scanning_callback f)
+void boxroot_setup_hooks(boxroot_scanning_callback f)
 {
   scanning_callback = f;
   // save previous hooks and install ours
@@ -81,7 +84,7 @@ static void boxroot_scan_hook(scanning_action action)
   (*scanning_callback)(action, NULL);
 }
 
-void boxroot_private_setup_hooks(boxroot_scanning_callback f)
+void boxroot_setup_hooks(boxroot_scanning_callback f)
 {
   scanning_callback = f;
   // save previous hooks

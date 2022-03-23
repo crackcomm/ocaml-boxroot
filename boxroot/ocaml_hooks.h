@@ -1,9 +1,9 @@
 #ifndef OCAML_HOOKS_H
 #define OCAML_HOOKS_H
 
-#define CAML_NAME_SPACE
-#define CAML_INTERNALS
+#ifdef CAML_INTERNALS
 
+#include <caml/mlvalues.h>
 #include <caml/roots.h>
 #include <caml/version.h>
 
@@ -30,10 +30,10 @@
 
 typedef void (*boxroot_scanning_callback) (scanning_action action, void *data);
 
-void boxroot_private_setup_hooks(boxroot_scanning_callback f);
-void boxroot_private_reset_hooks();
+void boxroot_setup_hooks(boxroot_scanning_callback f);
 
-int boxroot_private_in_minor_collection();
+int boxroot_in_minor_collection();
 
+#endif // CAML_INTERNALS
 
 #endif // OCAML_HOOKS_H

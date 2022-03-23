@@ -746,7 +746,7 @@ static int scan_pools(scanning_action action, void *data)
 {
   int work = 0;
   FOREACH_GLOBAL_RING(global, cl, {
-      if (cl == UNTRACKED || (boxroot_private_in_minor_collection()
+      if (cl == UNTRACKED || (boxroot_in_minor_collection()
                                  && cl == OLD))
         continue;
       pool *start_pool = *global;
@@ -764,7 +764,7 @@ static void scan_roots(scanning_action action, void *data)
 {
   if (DEBUG) validate_all_pools();
   int work = scan_pools(action, data);
-  if (boxroot_private_in_minor_collection()) {
+  if (boxroot_in_minor_collection()) {
     promote_young_pools();
     stats.total_scanning_work_minor += work;
   } else {
@@ -912,7 +912,7 @@ static void scanning_callback(scanning_action action, void *data)
     CRITICAL_SECTION_END();
     return;
   }
-  int in_minor_collection = boxroot_private_in_minor_collection();
+  int in_minor_collection = boxroot_in_minor_collection();
   if (in_minor_collection) ++stats.minor_collections;
   else ++stats.major_collections;
   // If no boxroot has been allocated, then scan_roots should not have
@@ -944,7 +944,7 @@ int boxroot_setup()
   struct stats empty_stats = {0};
   stats = empty_stats;
   FOREACH_GLOBAL_RING(global, cl, { *global = NULL; });
-  boxroot_private_setup_hooks(&scanning_callback);
+  boxroot_setup_hooks(&scanning_callback);
   // we are done
   setup = 1;
   CRITICAL_SECTION_END();
