@@ -1,11 +1,6 @@
 #ifndef OCAML_HOOKS_H
 #define OCAML_HOOKS_H
 
-#ifdef CAML_INTERNALS
-
-#include <caml/mlvalues.h>
-#include <caml/minor_gc.h>
-#include <caml/roots.h>
 #include <caml/version.h>
 
 #if OCAML_VERSION >= 50000
@@ -13,6 +8,12 @@
 #else
 #define OCAML_MULTICORE 0
 #endif
+
+#ifdef CAML_INTERNALS
+
+#include <caml/mlvalues.h>
+#include <caml/minor_gc.h>
+#include <caml/roots.h>
 
 #if OCAML_MULTICORE
 

@@ -29,6 +29,10 @@
       ../boxroot/ocaml_hooks.h
       ../boxroot/platform.h
     )
+    (flags -DENABLE_BOXROOT_MUTEX=%{env:ENABLE_BOXROOT_MUTEX=0}
+        -DBOXROOT_DEBUG=%{env:BOXROOT_DEBUG=0}
+        -Wall -Wshadow -Wpointer-arith -Wcast-qual -Wsign-compare
+        -O2 -fno-strict-aliasing)
     (names local_roots_stubs)
   )
   (modules local_roots)

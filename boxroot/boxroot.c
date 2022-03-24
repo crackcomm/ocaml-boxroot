@@ -33,15 +33,6 @@
 
 /* {{{ Parameters */
 
-/* Log of the size of the pools (12 = 4KB, an OS page).
-   Recommended: 14. */
-#define POOL_LOG_SIZE 14
-#define POOL_SIZE ((size_t)1 << POOL_LOG_SIZE)
-
-/* Take the slow path on deallocation every DEALLOC_THRESHOLD_SIZE
-   deallocations. */
-#define DEALLOC_THRESHOLD_SIZE_LOG 4 // 16
-#define DEALLOC_THRESHOLD_SIZE ((int)1 << DEALLOC_THRESHOLD_SIZE_LOG)
 /* The pool is divided in NUM_DEALLOC_THRESHOLD parts of equal size
    DEALLOC_THRESHOLD_SIZE. */
 #define NUM_DEALLOC_THRESHOLD ((int)(POOL_SIZE / (DEALLOC_THRESHOLD_SIZE * sizeof(slot))))
@@ -67,11 +58,10 @@ typedef enum class {
 typedef void * slot;
 
 struct header {
+  boxroot_fl free_list;
+  class class;
   struct pool *prev;
   struct pool *next;
-  slot *free_list;
-  int alloc_count;
-  class class;
 };
 
 static_assert(POOL_SIZE / sizeof(slot) <= INT_MAX, "pool size too large");
@@ -122,6 +112,8 @@ static struct {
  */
   pool *free;
 } pools;
+
+boxroot_fl *boxroot_current_fl = NULL;
 
 static pool ** const global_rings[] =
   { &pools.old_full, &pools.old_available, &pools.old_low,
@@ -279,8 +271,8 @@ static pool * get_uninitialised_pool()
   if (p == NULL) return NULL;
   ++stats.total_alloced_pools;
   ring_link(p, p);
-  p->hd.free_list = NULL;
-  p->hd.alloc_count = 0;
+  p->hd.free_list.next = NULL;
+  p->hd.free_list.alloc_count = 0;
   p->hd.class = UNTRACKED;
   return p;
 }
@@ -293,7 +285,7 @@ static inline slot empty_free_list(pool *p) {
 
 static inline int is_full_pool(pool *p)
 {
-  return is_empty_free_list(p->hd.free_list, p);
+  return is_empty_free_list(p->hd.free_list.next, p);
 }
 
 static pool * get_empty_pool()
@@ -308,7 +300,7 @@ static pool * get_empty_pool()
   for (slot *s = out->roots + POOL_ROOTS_CAPACITY - 2; s >= out->roots; --s) {
     *s = (slot)(s + 1);
   }
-  out->hd.free_list = out->roots;
+  out->hd.free_list.next = out->roots;
   return out;
 }
 
@@ -365,8 +357,8 @@ static int get_threshold(int alloc_count)
 
 static occupancy promotion_occupancy(pool *p)
 {
-  if (p->hd.alloc_count == 0) return EMPTY;
-  int threshold = get_threshold(p->hd.alloc_count);
+  if (p->hd.free_list.alloc_count == 0) return EMPTY;
+  int threshold = get_threshold(p->hd.free_list.alloc_count);
   if (threshold <= LOW_COUNT_THRESHOLD) return LOW;
   if (threshold <= HIGH_COUNT_THRESHOLD) return HIGH;
   return QUASI_FULL;
@@ -374,12 +366,17 @@ static occupancy promotion_occupancy(pool *p)
 
 static occupancy demotion_occupancy(pool *p)
 {
-  assert(is_alloc_threshold(p->hd.alloc_count));
-  if (p->hd.alloc_count == 0) return EMPTY;
-  int threshold = get_threshold(p->hd.alloc_count);
+  assert(is_alloc_threshold(p->hd.free_list.alloc_count));
+  if (p->hd.free_list.alloc_count == 0) return EMPTY;
+  int threshold = get_threshold(p->hd.free_list.alloc_count);
   if (threshold == LOW_COUNT_THRESHOLD && p->hd.class == OLD) return LOW;
   if (threshold == HIGH_COUNT_THRESHOLD) return HIGH;
   return NO_CHANGE;
+}
+
+static void update_pool_aliases()
+{
+  boxroot_current_fl = &pools.young_available->hd.free_list;
 }
 
 static void pool_reclassify(pool *p, occupancy occ)
@@ -392,7 +389,7 @@ static void pool_reclassify(pool *p, occupancy occ)
   pool **target = NULL;
   switch (occ) {
   case EMPTY:
-    assert(p->hd.alloc_count == 0);
+    assert(p->hd.free_list.alloc_count == 0);
     target = &pools.free;
     break;
   case LOW:
@@ -410,6 +407,7 @@ static void pool_reclassify(pool *p, occupancy occ)
   // Add at the end instead of in front, since pools which have been
   // there longer might be better choices for selection.
   ring_push_back(p, target);
+  update_pool_aliases();
 }
 
 static void try_demote_pool(pool *p)
@@ -423,6 +421,11 @@ static void try_demote_pool(pool *p)
   pool_remove(p);
   if (occ == EMPTY) p->hd.class = UNTRACKED;
   pool_reclassify(p, occ);
+}
+
+void boxroot_try_demote_pool(boxroot_fl *fl)
+{
+  try_demote_pool((pool *)fl);
 }
 
 // Find an available pool for the class (young or old), ensure it is a
@@ -464,6 +467,7 @@ static pool * find_available_pool(int for_young)
   new_pool->hd.class = for_young ? YOUNG : OLD;
   assert(*target == NULL);
   *target = new_pool;
+  update_pool_aliases();
   return new_pool;
 }
 
@@ -506,50 +510,52 @@ static void promote_young_pools()
 
 /* {{{ Allocation, deallocation */
 
-static slot * alloc_slot_slow(int);
+boxroot boxroot_create_slow(value init);
 
 // hot path
-static inline slot * alloc_slot(int for_young_block)
+static inline boxroot alloc_slot(value init, int for_young_block)
 {
   pool *p = for_young_block ? pools.young_available : pools.old_available;
   if (LIKELY(p != NULL)) {
-    slot *new_root = p->hd.free_list;
+    slot *new_root = p->hd.free_list.next;
     if (LIKELY(!is_empty_free_list(new_root, p))) {
-      p->hd.free_list = (slot *)*new_root;
-      p->hd.alloc_count++;
-      return new_root;
+      p->hd.free_list.next = *new_root;
+      p->hd.free_list.alloc_count++;
+      *((value *)new_root) = init;
+      return (boxroot)new_root;
     }
   }
-  return alloc_slot_slow(for_young_block);
+  return boxroot_create_slow(init);
 }
 
 static int setup;
 
 // Place an available pool in front of the ring and allocate from it.
-static slot * alloc_slot_slow(int for_young_block)
+boxroot boxroot_create_slow(value init)
 {
   // We might be here because boxroot is not setup.
   if (!setup) {
     fprintf(stderr, "boxroot is not setup\n");
     return NULL;
   }
-  // TODO Latency: bound the number of young roots alloced at each
-  // minor collection by scheduling a minor collection.
+  int for_young_block = 1;// Is_young_block(init);
+  // TODO Latency: bound the number of roots allocated between each
+  // minor collection by scheduling a minor collection?
   pool *p = find_available_pool(for_young_block);
   if (p == NULL) return NULL;
   assert(!is_full_pool(p));
   assert(for_young_block == (p->hd.class == YOUNG));
-  return alloc_slot(for_young_block);
+  return alloc_slot(init, for_young_block);
 }
 
 // hot path
 // assumes [is_pool_member(s, p)]
 static inline void free_slot(slot *s, pool *p)
 {
-  *s = (slot)p->hd.free_list;
-  p->hd.free_list = s;
-  if (DEBUG) assert(p->hd.alloc_count > 0);
-  if (UNLIKELY(is_alloc_threshold(--p->hd.alloc_count))) {
+  *s = (slot)p->hd.free_list.next;
+  p->hd.free_list.next = s;
+  if (DEBUG) assert(p->hd.free_list.alloc_count > 0);
+  if (UNLIKELY(is_alloc_threshold(--p->hd.free_list.alloc_count))) {
     try_demote_pool(p);
   }
 }
@@ -559,15 +565,7 @@ static inline void free_slot(slot *s, pool *p)
 /* {{{ Boxroot API implementation */
 
 // hot path
-static inline boxroot root_create_classified(value init, int for_young_block)
-{
-  value *cell = (value *)alloc_slot(for_young_block);
-  if (LIKELY(cell != NULL)) *cell = init;
-  return (boxroot)cell;
-}
-
-// hot path
-boxroot boxroot_create(value init)
+boxroot boxroot_create_impl(value init)
 {
   CRITICAL_SECTION_BEGIN();
   int is_young = is_young_block(init);
@@ -575,16 +573,18 @@ boxroot boxroot_create(value init)
     if (is_young) ++stats.total_create_young;
     else ++stats.total_create_old;
   }
-  boxroot br = root_create_classified(init, is_young);
+  boxroot br = alloc_slot(init, is_young);
   CRITICAL_SECTION_END();
   return br;
 }
 
-extern value boxroot_get(boxroot root);
-extern value const * boxroot_get_ref(boxroot root);
+extern inline boxroot boxroot_create(value init);
+
+extern inline value boxroot_get(boxroot root);
+extern inline value const * boxroot_get_ref(boxroot root);
 
 // hot path
-void boxroot_delete(boxroot root)
+void boxroot_delete_impl(boxroot root)
 {
   CRITICAL_SECTION_BEGIN();
   slot *s = (slot *)root;
@@ -597,9 +597,11 @@ void boxroot_delete(boxroot root)
   CRITICAL_SECTION_END();
 }
 
+extern inline void boxroot_delete(boxroot root);
+
 static void boxroot_reallocate(boxroot *root, pool *p, value new_value)
 {
-  boxroot new = root_create_classified(new_value, 1);
+  boxroot new = alloc_slot(new_value, 1);
   if (LIKELY(new != NULL)) {
     free_slot((slot *)*root, p);
     *root = new;
@@ -619,10 +621,8 @@ void boxroot_modify(boxroot *root, value new_value)
   slot *s = (slot *)*root;
   DEBUGassert(s);
   if (DEBUG) ++stats.total_modify;
-  int is_new_young_block = is_young_block(new_value);
-  pool *p;
-  if (LIKELY(!is_new_young_block
-             || (p = get_pool_header(s))->hd.class == YOUNG)) {
+  pool *p = get_pool_header(s);
+  if (LIKELY(p->hd.class == YOUNG || !Is_young_block(new_value))) {
     *(value *)s = new_value;
   } else {
     // We need to reallocate, but this reallocation happens at most once
@@ -638,20 +638,20 @@ void boxroot_modify(boxroot *root, value new_value)
 
 static void validate_pool(pool *pl)
 {
-  if (pl->hd.free_list == NULL) {
+  if (pl->hd.free_list.next == NULL) {
     // an unintialised pool
     assert(pl->hd.class == UNTRACKED);
     return;
   }
   // check freelist structure and length
-  slot *curr = pl->hd.free_list;
+  slot *curr = pl->hd.free_list.next;
   int pos = 0;
   for (; !is_empty_free_list(curr, pl); curr = (slot*)*curr, pos++)
   {
     assert(pos < POOL_ROOTS_CAPACITY);
     assert(curr >= pl->roots && curr < pl->roots + POOL_ROOTS_CAPACITY);
   }
-  assert(pos == POOL_ROOTS_CAPACITY - pl->hd.alloc_count);
+  assert(pos == POOL_ROOTS_CAPACITY - pl->hd.free_list.alloc_count);
   // check count of allocated elements
   int alloc_count = 0;
   for(int i = 0; i < POOL_ROOTS_CAPACITY; i++) {
@@ -663,7 +663,7 @@ static void validate_pool(pool *pl)
       ++alloc_count;
     }
   }
-  assert(alloc_count == pl->hd.alloc_count);
+  assert(alloc_count == pl->hd.free_list.alloc_count);
 }
 
 static void validate_all_pools()
@@ -687,7 +687,7 @@ static void validate_all_pools()
 // returns the amount of work done
 static int scan_pool(scanning_action action, void *data, pool *pl)
 {
-  int allocs_to_find = pl->hd.alloc_count;
+  int allocs_to_find = pl->hd.free_list.alloc_count;
   slot *current = pl->roots;
   while (allocs_to_find) {
     // hot path
@@ -771,7 +771,7 @@ static int boxroot_used()
   FOREACH_GLOBAL_RING (global, cl, {
       if (cl == UNTRACKED) continue;
       pool *p = *global;
-      if (p != NULL && (p->hd.alloc_count != 0 || p->hd.next != p)) {
+      if (p != NULL && (p->hd.free_list.alloc_count != 0 || p->hd.next != p)) {
         return 1;
       }
     });
