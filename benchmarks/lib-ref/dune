@@ -7,12 +7,14 @@
     (extra_deps
       ../../boxroot/boxroot.h
       ../../boxroot/dll_boxroot.h
+      ../../boxroot/rem_boxroot.h
     )
     (names
       tagged_out_of_heap
       gc
       boxroot
       dll_boxroot
+      rem_boxroot
       global
       generational
     )
