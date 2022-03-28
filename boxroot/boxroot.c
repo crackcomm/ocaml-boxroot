@@ -647,6 +647,7 @@ static void boxroot_reallocate(boxroot *root, pool *p, value new_value)
     pool_remove(p);
     p->hd.class = YOUNG;
     ring_push_back(p, &pools.young_available);
+    **((value **)root) = new_value;
   }
 }
 
