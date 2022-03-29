@@ -3,7 +3,6 @@
 // This is emacs folding-mode
 
 #include <assert.h>
-#include <errno.h>
 #include <limits.h>
 #if defined(ENABLE_BOXROOT_MUTEX) && (ENABLE_BOXROOT_MUTEX == 1)
 #include <pthread.h>
@@ -12,7 +11,6 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdint.h>
-#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -29,33 +27,7 @@
 #endif
 
 #include "ocaml_hooks.h"
-
-/* }}} */
-
-/* {{{ Parameters */
-
-/* Log of the size of the pools (12 = 4KB, an OS page).
-   Recommended: 14. */
-#define POOL_LOG_SIZE 14
-/* Check integrity of pool structure after each scan, and print
-   additional statistics? (slow)
-   This can also be enabled by defining the macro BOXROOT_DEBUG.
-   Recommended: 0. */
-#if defined(BOXROOT_DEBUG) && (BOXROOT_DEBUG == 1)
-#define DEBUG 1
-#define DEBUGassert(x) assert(x)
-#else
-#define DEBUG 0
-#define DEBUGassert(x) ((void)0)
-#endif
-
-/* }}} */
-
-/* {{{ Setup */
-
-
-#define POOL_SIZE ((size_t)1 << POOL_LOG_SIZE)
-#define POOL_ALIGNMENT POOL_SIZE
+#include "platform.h"
 
 /* }}} */
 
@@ -76,8 +48,6 @@ struct header {
   int alloc_count;
   class class;
 };
-
-static_assert(POOL_SIZE / sizeof(slot) <= INT_MAX, "pool size too large");
 
 #define POOL_ROOTS_CAPACITY                                 \
   ((int)((POOL_SIZE - sizeof(struct header)) / sizeof(slot)))
@@ -224,28 +194,6 @@ static inline int is_young_block(value v)
 
 /* }}} */
 
-/* {{{ Platform-specific allocation */
-
-static void * alloc_uninitialised_pool()
-{
-  void *p = NULL;
-  // TODO: portability?
-  // Win32: p = _aligned_malloc(size, alignment);
-  int err = posix_memalign(&p, POOL_ALIGNMENT, POOL_SIZE);
-  assert(err != EINVAL);
-  if (err == ENOMEM) return NULL;
-  assert(p != NULL);
-  ++stats.total_alloced_pools;
-  return p;
-}
-
-static void free_pool(pool *p) {
-    // Win32: _aligned_free(p);
-    free(p);
-}
-
-/* }}} */
-
 /* {{{ Ring operations */
 
 static void ring_link(pool *p, pool *q)
@@ -300,6 +248,7 @@ static pool * get_uninitialised_pool()
 {
   pool *p = alloc_uninitialised_pool();
   if (p == NULL) return NULL;
+  ++stats.total_alloced_pools;
   ring_link(p, p);
   p->hd.free_list = NULL;
   p->hd.alloc_count = 0;

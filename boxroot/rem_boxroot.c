@@ -30,37 +30,7 @@
 #endif
 
 #include "ocaml_hooks.h"
-
-/* }}} */
-
-/* {{{ Enable debug mode? */
-
-/* Debug mode (slow) is enabled by defining BOXROOT_DEBUG. It:
-   - performs runtime checks along the way
-   - checks full integrity of pool structure after each scan
-   - prints additional statistics. */
-#if defined(BOXROOT_DEBUG) && (BOXROOT_DEBUG == 1)
-#define DEBUG 1
-#define DEBUGassert(x) assert(x)
-#else
-#define DEBUG 0
-#define DEBUGassert(x) ((void)0)
-#endif
-
-/* }}} */
-
-/* {{{ Parameters */
-
-/* Log of the size of the pools (12 = 4KB, an OS page).
-   Recommended: 14. */
-#define POOL_LOG_SIZE 14
-
-/* }}} */
-
-/* {{{ Setup */
-
-#define POOL_SIZE ((size_t)1 << POOL_LOG_SIZE)
-#define POOL_ALIGNMENT POOL_SIZE
+#include "platform.h"
 
 /* }}} */
 
@@ -215,29 +185,6 @@ static inline void remember(caml_domain_state *caml_state, slot *s)
 
 /* }}} */
 
-/* {{{ Platform-specific allocation */
-
-static void * alloc_uninitialised_pool(void)
-{
-  void *p = NULL;
-  // TODO: portability?
-  // Win32: p = _aligned_malloc(size, alignment);
-  int err = posix_memalign(&p, POOL_ALIGNMENT, POOL_SIZE);
-  assert(err != EINVAL);
-  if (err == ENOMEM) return NULL;
-  assert(p != NULL);
-  ++stats.total_alloced_pools;
-  return p;
-}
-
-static void free_pool(pool *p) {
-    ++stats.total_freed_pools;
-    // Win32: _aligned_free(p);
-    free(p);
-}
-
-/* }}} */
-
 /* {{{ Ring operations */
 
 static void ring_link(pool *p, pool *q)
@@ -342,6 +289,7 @@ static pool * get_empty_pool(void)
 
   pool *p = alloc_uninitialised_pool();
   if (p == NULL) return NULL;
+  ++stats.total_alloced_pools;
 
   ring_link(p, p);
   p->hd.major_free_list = empty_free_list(p);
@@ -394,6 +342,7 @@ static void free_all_pools(void) {
   while (pools != NULL) {
     pool *p = ring_pop(&pools);
     free_pool(p);
+    ++stats.total_freed_pools;
   }
 }
 
@@ -643,6 +592,7 @@ static void free_empty_pools(void) {
         --keep_empty_pools;
       } else {
         free_pool(pool_remove(p));
+        ++stats.total_freed_pools;
       }
     }
     p = next;

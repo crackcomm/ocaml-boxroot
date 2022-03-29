@@ -29,18 +29,7 @@
 #endif
 
 #include "ocaml_hooks.h"
-
-/* }}} */
-
-/* {{{ Parameters */
-
-#if defined(BOXROOT_DEBUG) && (BOXROOT_DEBUG == 1)
-#define DEBUG 1
-#define DEBUGassert(x) assert(x)
-#else
-#define DEBUG 0
-#define DEBUGassert(x) ((void)0)
-#endif
+#include "platform.h"
 
 /* }}} */
 
