@@ -6,6 +6,7 @@ type impl = {
 }
 
 external local_fixpoint : (float -> float) -> float -> float = "local_fixpoint"
+external naive_fixpoint : (float -> float) -> float -> float = "naive_fixpoint"
 external boxroot_fixpoint : (float -> float) -> float -> float = "boxroot_fixpoint"
 external dll_boxroot_fixpoint : (float -> float) -> float -> float = "dll_boxroot_fixpoint"
 external rem_boxroot_fixpoint : (float -> float) -> float -> float = "rem_boxroot_fixpoint"
@@ -38,6 +39,13 @@ let generational = {
   stats = ignore;
 }
 
+let naive = {
+  fixpoint = naive_fixpoint;
+  setup = boxroot_setup;
+  teardown = boxroot_teardown;
+  stats = boxroot_stats;
+}
+
 let boxroot = {
   fixpoint = boxroot_fixpoint;
   setup = boxroot_setup;
@@ -61,6 +69,7 @@ let rem_boxroot = {
 
 let implementations = [
   "local", local;
+  "naive", naive;
   "boxroot", boxroot;
   "dll_boxroot", dll_boxroot;
   "rem_boxroot", rem_boxroot;
