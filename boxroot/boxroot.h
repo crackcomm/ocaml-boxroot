@@ -6,7 +6,6 @@
 #include <caml/mlvalues.h>
 #include <caml/minor_gc.h>
 #include <caml/address_class.h>
-#include "ocaml_hooks.h"
 #include "platform.h"
 
 typedef struct boxroot_private* boxroot;
@@ -67,46 +66,9 @@ typedef struct {
 
 extern boxroot_fl *boxroot_current_fl;
 
-/* The following definition has smaller code size, and should have
-   better branch prediction than Is_young. */
-#if OCAML_MULTICORE
-#define Is_young2(val)                                                \
-  ((uintnat)(val) - (uintnat)caml_minor_heaps_base <                  \
-   (uintnat)caml_minor_heaps_end - (uintnat)caml_minor_heaps_base)
-#else
-#define Is_young2(val)                                                \
-  ((uintnat)(val) - (uintnat)Caml_state->young_start <=               \
-   (uintnat)Caml_state->young_end - (uintnat)Caml_state->young_start)
-#endif // OCAML_MULTICORE
-
-#define Is_young_block(v) (Is_young2(v) && LIKELY(Is_block(v)))
-
-#if (defined(ENABLE_BOXROOT_MUTEX) && (ENABLE_BOXROOT_MUTEX == 1)) || \
-  (defined(BOXROOT_DEBUG) && (BOXROOT_DEBUG == 1))
-#define BOXROOT_NO_INLINE
-#endif
-
-#ifdef BOXROOT_NO_INLINE
-
-boxroot boxroot_create_impl(value v);
-
-inline boxroot boxroot_create(value v)
-{
-  return boxroot_create_impl(v);
-}
-
-void boxroot_delete_impl(boxroot root);
-
-inline void boxroot_delete(boxroot root)
-{
-  return boxroot_delete_impl(root);
-}
-
-#else
-
 boxroot boxroot_create_slow(value);
 
-inline boxroot boxroot_create(value init)
+inline boxroot boxroot_create_inline(value init)
 {
   boxroot_fl *fl = boxroot_current_fl;
   if (UNLIKELY(fl == NULL)) goto out_slow;
@@ -132,12 +94,13 @@ out_slow:
 
 void boxroot_try_demote_pool(boxroot_fl *p);
 
-#define Get_freelist(s) ((boxroot_fl *)((uintptr_t)s & ~((uintptr_t)POOL_SIZE - 1)))
+#define Get_pool_header(s)                                \
+  ((void *)((uintptr_t)s & ~((uintptr_t)POOL_SIZE - 1)))
 
-inline void boxroot_delete(boxroot root)
+inline void boxroot_delete_inline(boxroot root)
 {
   void **s = (void **)root;
-  boxroot_fl *fl = Get_freelist(s);
+  boxroot_fl *fl = Get_pool_header(s);
   *s = (void *)fl->next;
   fl->next = s;
   int alloc_count = --fl->alloc_count;
@@ -146,6 +109,23 @@ inline void boxroot_delete(boxroot root)
     boxroot_try_demote_pool(fl);
   }
 }
+
+#if (defined(ENABLE_BOXROOT_MUTEX) && (ENABLE_BOXROOT_MUTEX == 1)) || \
+  (defined(BOXROOT_DEBUG) && (BOXROOT_DEBUG == 1))
+#define BOXROOT_NO_INLINE
+#endif
+
+#ifdef BOXROOT_NO_INLINE
+
+boxroot boxroot_create_debug(value v);
+void boxroot_delete_debug(boxroot root);
+inline boxroot boxroot_create(value v) { return boxroot_create_debug(v); }
+inline void boxroot_delete(boxroot root) { boxroot_delete_debug(root); }
+
+#else
+
+inline boxroot boxroot_create(value v) { return boxroot_create_inline(v); }
+inline void boxroot_delete(boxroot root) { boxroot_delete_inline(root); }
 
 #endif // BOXROOT_NO_INLINE
 

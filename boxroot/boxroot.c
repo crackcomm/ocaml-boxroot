@@ -169,7 +169,6 @@ struct stats {
   int live_pools; // number of tracked pools
   int peak_pools; // max live pools at any time
   int ring_operations; // Number of times hd.next is mutated
-  long long is_young; // number of times is_young was called
   long long young_hit; // number of times a young value was encountered
                        // during scanning
   long long get_pool_header; // number of times get_pool_header was called
@@ -184,10 +183,10 @@ static struct stats stats;
 /* {{{ Tests in the hot path */
 
 // hot path
-static inline pool * get_pool_header(slot *v)
+static inline pool * get_pool_header(slot *s)
 {
   if (DEBUG) ++stats.get_pool_header;
-  return (pool *)((uintptr_t)v & ~((uintptr_t)POOL_SIZE - 1));
+  return Get_pool_header(s);
 }
 
 // Return true iff v shares the same msbs as p and is not an
@@ -204,13 +203,6 @@ static inline int is_empty_free_list(slot *v, pool *p)
 {
   if (DEBUG) ++stats.is_empty_free_list;
   return (v == (slot *)p);
-}
-
-// hot path
-static inline int is_young_block(value v)
-{
-  if (DEBUG) ++stats.is_young;
-  return Is_block(v) && Is_young(v);
 }
 
 /* }}} */
@@ -432,14 +424,13 @@ void boxroot_try_demote_pool(boxroot_fl *fl)
 // the start of the corresponding ring of available pools, and return
 // the pool. Return NULL if none was found and the allocation of a new
 // one failed.
-static pool * find_available_pool(int for_young)
+static pool * find_available_pool()
 {
-  pool **target = for_young ? &pools.young_available : &pools.old_available;
+  pool **target = &pools.young_available;
   // Reclassify the first pool if it is full
   if (*target != NULL && is_full_pool(*target)) {
       pool *full = ring_pop(target);
       assert(promotion_occupancy(full) == QUASI_FULL);
-      assert(for_young == (YOUNG == full->hd.class));
       pool_reclassify(full, QUASI_FULL);
   }
   // Note: we only ever allocate from the the first pool of each ring,
@@ -464,7 +455,7 @@ static pool * find_available_pool(int for_young)
     new_pool = get_empty_pool();
   }
   if (new_pool == NULL) return NULL;
-  new_pool->hd.class = for_young ? YOUNG : OLD;
+  new_pool->hd.class = YOUNG;
   assert(*target == NULL);
   *target = new_pool;
   update_pool_aliases();
@@ -513,9 +504,9 @@ static void promote_young_pools()
 boxroot boxroot_create_slow(value init);
 
 // hot path
-static inline boxroot alloc_slot(value init, int for_young_block)
+static inline boxroot alloc_slot(value init)
 {
-  pool *p = for_young_block ? pools.young_available : pools.old_available;
+  pool *p = pools.young_available;
   if (LIKELY(p != NULL)) {
     slot *new_root = p->hd.free_list.next;
     if (LIKELY(!is_empty_free_list(new_root, p))) {
@@ -538,14 +529,12 @@ boxroot boxroot_create_slow(value init)
     fprintf(stderr, "boxroot is not setup\n");
     return NULL;
   }
-  int for_young_block = 1;// Is_young_block(init);
   // TODO Latency: bound the number of roots allocated between each
   // minor collection by scheduling a minor collection?
-  pool *p = find_available_pool(for_young_block);
+  pool *p = find_available_pool();
   if (p == NULL) return NULL;
   assert(!is_full_pool(p));
-  assert(for_young_block == (p->hd.class == YOUNG));
-  return alloc_slot(init, for_young_block);
+  return alloc_slot(init);
 }
 
 // hot path
@@ -564,36 +553,33 @@ static inline void free_slot(slot *s, pool *p)
 
 /* {{{ Boxroot API implementation */
 
-// hot path
-boxroot boxroot_create_impl(value init)
+extern inline value boxroot_get(boxroot root);
+extern inline value const * boxroot_get_ref(boxroot root);
+
+boxroot boxroot_create_debug(value init)
 {
   CRITICAL_SECTION_BEGIN();
-  int is_young = is_young_block(init);
   if (DEBUG) {
-    if (is_young) ++stats.total_create_young;
+    if (Is_block(init) && Is_young(init)) ++stats.total_create_young;
     else ++stats.total_create_old;
   }
-  boxroot br = alloc_slot(init, is_young);
+  boxroot br = boxroot_create_inline(init);
   CRITICAL_SECTION_END();
   return br;
 }
 
 extern inline boxroot boxroot_create(value init);
 
-extern inline value boxroot_get(boxroot root);
-extern inline value const * boxroot_get_ref(boxroot root);
-
-// hot path
-void boxroot_delete_impl(boxroot root)
+void boxroot_delete_debug(boxroot root)
 {
   CRITICAL_SECTION_BEGIN();
-  slot *s = (slot *)root;
-  DEBUGassert(s);
+  DEBUGassert(root != NULL);
   if (DEBUG) {
-    if (is_young_block(boxroot_get(root))) ++stats.total_delete_young;
+    value v = boxroot_get(root);
+    if (Is_block(v) && Is_young(v)) ++stats.total_delete_young;
     else ++stats.total_delete_old;
   }
-  free_slot(s, get_pool_header(s));
+  boxroot_delete_inline(root);
   CRITICAL_SECTION_END();
 }
 
@@ -601,7 +587,7 @@ extern inline void boxroot_delete(boxroot root);
 
 static void boxroot_reallocate(boxroot *root, pool *p, value new_value)
 {
-  boxroot new = alloc_slot(new_value, 1);
+  boxroot new = alloc_slot(new_value);
   if (LIKELY(new != NULL)) {
     free_slot((slot *)*root, p);
     *root = new;
@@ -622,7 +608,9 @@ void boxroot_modify(boxroot *root, value new_value)
   DEBUGassert(s);
   if (DEBUG) ++stats.total_modify;
   pool *p = get_pool_header(s);
-  if (LIKELY(p->hd.class == YOUNG || !Is_young_block(new_value))) {
+  if (LIKELY(p->hd.class == YOUNG
+             || !Is_block(new_value)
+             || !Is_young(new_value))) {
     *(value *)s = new_value;
   } else {
     // We need to reallocate, but this reallocation happens at most once
@@ -856,12 +844,10 @@ void boxroot_print_stats()
     (stats.young_hit * 100) / stats.total_scanning_work_minor
     : -1;
 
-  printf("is_young_block: %'lld\n"
-         "young hits: %d%%\n"
+  printf("young hits: %d%%\n"
          "get_pool_header: %'lld\n"
          "is_pool_member: %'lld\n"
          "is_empty_free_list: %'lld\n",
-         stats.is_young,
          young_hits_pct,
          stats.get_pool_header,
          stats.is_pool_member,
