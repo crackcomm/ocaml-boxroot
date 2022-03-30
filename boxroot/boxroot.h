@@ -66,46 +66,43 @@ typedef struct {
 
 extern boxroot_fl *boxroot_current_fl;
 
-boxroot boxroot_create_slow(value);
+boxroot boxroot_alloc_slot_slow(value);
 
-inline boxroot boxroot_create_inline(value init)
+inline boxroot boxroot_alloc_slot(value init)
 {
   boxroot_fl *fl = boxroot_current_fl;
-  if (UNLIKELY(fl == NULL)) goto out_slow;
   void *new_root = fl->next;
-  // is pool full?
-  if (UNLIKELY(new_root == fl)) goto out_slow;
+  if (UNLIKELY(new_root == fl))
+    // pool full, not allocated or not initialized
+    return boxroot_alloc_slot_slow(init);
   fl->next = *((void **)new_root);
   fl->alloc_count++;
   *((value *)new_root) = init;
   return (boxroot)new_root;
-out_slow:
-  return boxroot_create_slow(init);
 }
 
 /* Log of the size of the pools (12 = 4KB, an OS page).
    Recommended: 14. */
 #define POOL_LOG_SIZE 14
 #define POOL_SIZE ((size_t)1 << POOL_LOG_SIZE)
-/* Take the slow path on deallocation every DEALLOC_THRESHOLD_SIZE
-   deallocations. */
-#define DEALLOC_THRESHOLD_SIZE_LOG 7 // 128
-#define DEALLOC_THRESHOLD_SIZE ((int)1 << DEALLOC_THRESHOLD_SIZE_LOG)
+/* Move a pool towards the front of its ring for selection as current
+   pool every DEALLOC_THRESHOLD deallocations. Change this with
+   benchmarks in hand. */
+#define DEALLOC_THRESHOLD ((int)POOL_SIZE / 2)
 
 void boxroot_try_demote_pool(boxroot_fl *p);
 
 #define Get_pool_header(s)                                \
   ((void *)((uintptr_t)s & ~((uintptr_t)POOL_SIZE - 1)))
 
-inline void boxroot_delete_inline(boxroot root)
+inline void boxroot_free_slot(boxroot root)
 {
   void **s = (void **)root;
   boxroot_fl *fl = Get_pool_header(s);
   *s = (void *)fl->next;
   fl->next = s;
   int alloc_count = --fl->alloc_count;
-  if (UNLIKELY((alloc_count & (DEALLOC_THRESHOLD_SIZE - 1)) == 0
-               && fl != boxroot_current_fl)) {
+  if (UNLIKELY((alloc_count & (DEALLOC_THRESHOLD - 1)) == 0)) {
     boxroot_try_demote_pool(fl);
   }
 }
@@ -124,8 +121,8 @@ inline void boxroot_delete(boxroot root) { boxroot_delete_debug(root); }
 
 #else
 
-inline boxroot boxroot_create(value v) { return boxroot_create_inline(v); }
-inline void boxroot_delete(boxroot root) { boxroot_delete_inline(root); }
+inline boxroot boxroot_create(value v) { return boxroot_alloc_slot(v); }
+inline void boxroot_delete(boxroot root) { boxroot_free_slot(root); }
 
 #endif // BOXROOT_NO_INLINE
 

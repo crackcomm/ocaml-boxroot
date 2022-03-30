@@ -31,22 +31,6 @@
 
 /* }}} */
 
-/* {{{ Parameters */
-
-/* The pool is divided in NUM_DEALLOC_THRESHOLD parts of equal size
-   DEALLOC_THRESHOLD_SIZE. */
-#define NUM_DEALLOC_THRESHOLD ((int)(POOL_SIZE / (DEALLOC_THRESHOLD_SIZE * sizeof(slot))))
-/* Old pools become candidate for young allocation below
-   LOW_COUNT_THRESHOLD / NUM_DEALLOC_THRESHOLD occupancy. This tries
-   to guarantee that minor scanning hits a good proportion of young
-   values. */
-#define LOW_COUNT_THRESHOLD (NUM_DEALLOC_THRESHOLD / 2)
-/* Pools become candidate for allocation below HIGH_COUNT_THRESHOLD /
-   NUM_DEALLOC_THRESHOLD occupancy. */
-#define HIGH_COUNT_THRESHOLD (NUM_DEALLOC_THRESHOLD - 1)
-
-/* }}} */
-
 /* {{{ Data types */
 
 typedef enum class {
@@ -85,46 +69,33 @@ static_assert(sizeof(pool) == POOL_SIZE, "bad pool size");
 
 /* Global pool rings. */
 static struct {
-/* Pools of old values: contains only roots pointing to the major
-   heap. Scanned at the start of major collection. */
-  /* Full or almost. Not considered for allocation. */
-  pool *old_full;
-  /* Next considered for allocation. */
-  pool *old_available;
-  /* Pools with lots of available space, considered in priority for
-     recycling into a young pool.*/
-  pool *old_low;
-
-/* Pools of young values: contains roots pointing to the major or to
-   the minor heap. Scanned at the start of minor and major
-   collection. */
-  /* Next considered for allocation. */
-  pool *young_available;
-  /* Full or almost. Not considered for allocation. */
-  pool *young_full;
-
-/* Pools containing no root: not scanned.
-
-   We could free these pools immediately, but this could lead to
-   stuttering behavior for workloads that regularly come back to
-   0 boxroots alive. Instead we wait for the next major slice to free
-   empty pools.
- */
+  /* Pool of old values: contains only roots pointing to the major
+     heap. Scanned at the start of major collection. */
+  pool *old;
+  /* Pool of young values: contains roots pointing to the major or to
+     the minor heap. Scanned at the start of minor and major
+     collection. */
+  pool *young;
+  /* Current pool. Ring of size 1. */
+  pool *current;
+  /* Pools containing no root: not scanned.
+     We could free these pools immediately, but this could lead to
+     stuttering behavior for workloads that regularly come back to
+     0 boxroots alive. Instead we wait for the next major slice to free
+     empty pools.
+  */
   pool *free;
 } pools;
 
-boxroot_fl *boxroot_current_fl = NULL;
+static boxroot_fl empty_fl = { (void *)&empty_fl, -1 };
+
+boxroot_fl *boxroot_current_fl = &empty_fl;
 
 static pool ** const global_rings[] =
-  { &pools.old_full, &pools.old_available, &pools.old_low,
-    &pools.young_available, &pools.young_full,
-    &pools.free,
-    NULL };
+  { &pools.old, &pools.young, &pools.current, &pools.free, NULL };
 
 static const class global_ring_classes[] =
-  { OLD, OLD, OLD,
-    YOUNG, YOUNG,
-    UNTRACKED };
+  { OLD, YOUNG, YOUNG, UNTRACKED };
 
 /* Iterate on all global rings.
    [global_ring]: a variable of type [pool**].
@@ -209,19 +180,19 @@ static inline int is_empty_free_list(slot *v, pool *p)
 
 /* {{{ Ring operations */
 
-static void ring_link(pool *p, pool *q)
+static inline void ring_link(pool *p, pool *q)
 {
   p->hd.next = q;
   q->hd.prev = p;
   ++stats.ring_operations;
 }
 
-static void validate_pool(pool*);
-
 // insert the ring [source] at the back of [*target].
-static void ring_push_back(pool *source, pool **target)
+static inline void ring_push_back(pool *source, pool **target)
 {
-  if (source == NULL) return;
+  DEBUGassert(source != NULL);
+  DEBUGassert(source->hd.prev == source && source->hd.next == source);
+  DEBUGassert(source != *target);
   if (*target == NULL) {
     *target = source;
     if (DEBUG) {
@@ -230,7 +201,7 @@ static void ring_push_back(pool *source, pool **target)
         });
     }
   } else {
-    assert((*target)->hd.class == source->hd.class);
+    DEBUGassert((*target)->hd.class == source->hd.class);
     pool *target_last = (*target)->hd.prev;
     pool *source_last = source->hd.prev;
     ring_link(target_last, source);
@@ -238,11 +209,17 @@ static void ring_push_back(pool *source, pool **target)
   }
 }
 
+static inline void ring_push_front(pool *source, pool **target)
+{
+  ring_push_back(source, target);
+  *target = source;
+}
+
 // remove the first element from [*target] and return it
 static pool * ring_pop(pool **target)
 {
   pool *front = *target;
-  assert(front);
+  DEBUGassert(front != NULL);
   if (front->hd.next == front) {
     *target = NULL;
   } else {
@@ -296,15 +273,8 @@ static pool * get_empty_pool()
   return out;
 }
 
-static void pool_remove(pool *p)
+static void free_pool_ring(pool **ring)
 {
-  pool *old = ring_pop(&p);
-  FOREACH_GLOBAL_RING(global, cl, {
-      if (*global == old) *global = p;
-    });
-}
-
-static void free_pool_ring(pool **ring) {
   while (*ring != NULL) {
       pool *p = ring_pop(ring);
       free_pool(p);
@@ -322,97 +292,41 @@ static void free_all_pools()
 
 /* {{{ Pool class management */
 
-static_assert(0 < LOW_COUNT_THRESHOLD, "");
-static_assert(LOW_COUNT_THRESHOLD < HIGH_COUNT_THRESHOLD, "");
-static_assert(HIGH_COUNT_THRESHOLD < NUM_DEALLOC_THRESHOLD, "");
-static_assert(1 + HIGH_COUNT_THRESHOLD * DEALLOC_THRESHOLD_SIZE
-              < POOL_ROOTS_CAPACITY, "HIGH_COUNT_THRESHOLD too high");
-
-// hot path
-static inline int is_alloc_threshold(int alloc_count)
+static inline int is_not_too_full(pool *p)
 {
-  return (alloc_count & (DEALLOC_THRESHOLD_SIZE - 1)) == 0;
+  return p->hd.free_list.alloc_count <= (int)(DEALLOC_THRESHOLD / sizeof(slot));
 }
 
-typedef enum occupancy {
-  EMPTY,
-  LOW,
-  HIGH,
-  QUASI_FULL,
-  NO_CHANGE
-} occupancy;
-
-static int get_threshold(int alloc_count)
+static void set_current_pool(pool *p)
 {
-  return 1 + (alloc_count - 1) / DEALLOC_THRESHOLD_SIZE;
-}
-
-static occupancy promotion_occupancy(pool *p)
-{
-  if (p->hd.free_list.alloc_count == 0) return EMPTY;
-  int threshold = get_threshold(p->hd.free_list.alloc_count);
-  if (threshold <= LOW_COUNT_THRESHOLD) return LOW;
-  if (threshold <= HIGH_COUNT_THRESHOLD) return HIGH;
-  return QUASI_FULL;
-}
-
-static occupancy demotion_occupancy(pool *p)
-{
-  assert(is_alloc_threshold(p->hd.free_list.alloc_count));
-  if (p->hd.free_list.alloc_count == 0) return EMPTY;
-  int threshold = get_threshold(p->hd.free_list.alloc_count);
-  if (threshold == LOW_COUNT_THRESHOLD && p->hd.class == OLD) return LOW;
-  if (threshold == HIGH_COUNT_THRESHOLD) return HIGH;
-  return NO_CHANGE;
-}
-
-static void update_pool_aliases()
-{
-  boxroot_current_fl = &pools.young_available->hd.free_list;
-}
-
-static void pool_reclassify(pool *p, occupancy occ)
-{
-  assert(occ != NO_CHANGE);
-  assert(p->hd.next == p);
-  class cl = p->hd.class;
-  assert((cl == UNTRACKED) == (occ == EMPTY));
-  int is_young = cl == YOUNG;
-  pool **target = NULL;
-  switch (occ) {
-  case EMPTY:
-    assert(p->hd.free_list.alloc_count == 0);
-    target = &pools.free;
-    break;
-  case LOW:
-    target = is_young ? &pools.young_available : &pools.old_low;
-    break;
-  case HIGH:
-    target = is_young ? &pools.young_available : &pools.old_available;
-    break;
-  case QUASI_FULL:
-    target = is_young ? &pools.young_full : &pools.old_full;
-    break;
-  case NO_CHANGE:
-    break;
+  DEBUGassert(pools.current == NULL);
+  pools.current = p;
+  if (p != NULL) {
+    p->hd.class = YOUNG;
+    boxroot_current_fl = &p->hd.free_list;
+  } else {
+    boxroot_current_fl = &empty_fl;
   }
-  // Add at the end instead of in front, since pools which have been
-  // there longer might be better choices for selection.
-  ring_push_back(p, target);
-  update_pool_aliases();
 }
 
+/* Move not-too-full pools to the front; move empty pools to the free
+   ring. */
 static void try_demote_pool(pool *p)
 {
-  if (p == pools.young_available || p == pools.old_available) {
-    // Ignore the pool currently used for allocation.
-    return;
+  DEBUGassert(p->hd.class != UNTRACKED);
+  if (p == pools.current || !is_not_too_full(p)) return;
+  pool **source = (p->hd.class == OLD) ? &pools.old : &pools.young;
+  pool **target;
+  if (p->hd.free_list.alloc_count == 0) {
+    target = &pools.free;
+    p->hd.class = UNTRACKED;
+  } else {
+    target = source;
   }
-  occupancy occ = demotion_occupancy(p);
-  if (occ == NO_CHANGE) return;
-  pool_remove(p);
-  if (occ == EMPTY) p->hd.class = UNTRACKED;
-  pool_reclassify(p, occ);
+  pool *tail = p;
+  ring_pop(&tail);
+  if (p == *source) *source = tail;
+  ring_push_front(p, target);
 }
 
 void boxroot_try_demote_pool(boxroot_fl *fl)
@@ -420,133 +334,83 @@ void boxroot_try_demote_pool(boxroot_fl *fl)
   try_demote_pool((pool *)fl);
 }
 
-// Find an available pool for the class (young or old), ensure it is a
-// the start of the corresponding ring of available pools, and return
-// the pool. Return NULL if none was found and the allocation of a new
-// one failed.
+static inline pool * pop_available(pool **target)
+{
+  /* When pools empty themselves, they are pushed to the front.
+     If the first one is full, then none are empty enough. */
+  if (*target == NULL || is_full_pool(*target)) return NULL;
+  return ring_pop(target);
+}
+
+/* Find an available pool and set it as current. Return NULL if none
+   was found and the allocation of a new one failed. */
 static pool * find_available_pool()
 {
-  pool **target = &pools.young_available;
-  // Reclassify the first pool if it is full
-  if (*target != NULL && is_full_pool(*target)) {
-      pool *full = ring_pop(target);
-      assert(promotion_occupancy(full) == QUASI_FULL);
-      pool_reclassify(full, QUASI_FULL);
-  }
-  // Note: we only ever allocate from the the first pool of each ring,
-  // so there is at most one full pool in front of the ring. We just
-  // reclassified it with the test above, so the next pool
-  // (if it exists) cannot be full.
-  if (*target != NULL) {
-    assert(!is_full_pool(*target));
-    return *target;
-  }
-  pool *new_pool = NULL;
-  if (pools.old_low != NULL) {
-    // YOUNG: We prefer to use an old pool which is not too full. We try to
-    // guarantee a good young-to-old ratio during minor scanning.
-    // OLD: We reserve the less full pools for re-use as young pools, but
-    // we did what we could, so take a less full one anyway.
-    new_pool = ring_pop(&pools.old_low);
-    // Do not bother with quasi-full pools.
-  } else if (pools.free != NULL) {
-    new_pool = ring_pop(&pools.free);
+  pool *p = pop_available(&pools.young);
+  if (p == NULL && pools.old != NULL && is_not_too_full(pools.old))
+    p = pop_available(&pools.old);
+  if (p == NULL) p = pop_available(&pools.free);
+  if (p == NULL) p = get_empty_pool();
+  DEBUGassert(pools.current == NULL);
+  set_current_pool(p);
+  return p;
+}
+
+static void reclassify_pool(pool **source, class cl)
+{
+  assert(*source != NULL);
+  pool *p = ring_pop(source);
+  pool **target = (cl == YOUNG) ? &pools.young : &pools.old;
+  p->hd.class = cl;
+  if (is_not_too_full(p)) {
+    ring_push_front(p, target);
   } else {
-    new_pool = get_empty_pool();
+    ring_push_back(p, target);
   }
-  if (new_pool == NULL) return NULL;
-  new_pool->hd.class = YOUNG;
-  assert(*target == NULL);
-  *target = new_pool;
-  update_pool_aliases();
-  return new_pool;
 }
 
 static void promote_young_pools()
 {
   // Promote full pools
-  pool *start = pools.young_full;
-  if (start != NULL) {
-    pool *p = start;
-    do {
-      p->hd.class = OLD;
-      p = p->hd.next;
-    } while (p != start);
-    ring_push_back(pools.young_full, &pools.old_full);
-    pools.young_full = NULL;
+  while (pools.young != NULL) {
+    reclassify_pool(&pools.young, OLD);
   }
-  // Promote available pools
-  pool *head_young = pools.young_available;
-  while (pools.young_available != NULL) {
-    pool *p = ring_pop(&pools.young_available);
-    occupancy occ = promotion_occupancy(p);
-    assert(occ != NO_CHANGE);
-    // A young pool can be empty if it has not been allocated
-    // into yet, or if it is the last available young pool.
-    p->hd.class = (occ == EMPTY) ? UNTRACKED : OLD;
-    pool_reclassify(p, occ);
-  }
-  // For very-low-latency applications: A program that does not use
-  // any boxroot should not have to pay the cost of scanning any pool.
-  assert(pools.young_available == NULL);
   // Heuristic: if a young pool has just been allocated, it is better
   // if it is the first one to be considered next time a young boxroot
-  // allocation takes place.
-  if (head_young != NULL && promotion_occupancy(head_young) == LOW) {
-    pools.old_low = head_young;
+  // allocation takes place. So we promote the current pool last.
+  if (pools.current != NULL) {
+    reclassify_pool(&pools.current, OLD);
+    set_current_pool(NULL);
   }
+  // A program that does not use any boxroot should not have to pay
+  // the cost of scanning any pool.
+  assert(pools.young == NULL && pools.current == NULL);
 }
 
 /* }}} */
 
 /* {{{ Allocation, deallocation */
 
-boxroot boxroot_create_slow(value init);
-
-// hot path
-static inline boxroot alloc_slot(value init)
-{
-  pool *p = pools.young_available;
-  if (LIKELY(p != NULL)) {
-    slot *new_root = p->hd.free_list.next;
-    if (LIKELY(!is_empty_free_list(new_root, p))) {
-      p->hd.free_list.next = *new_root;
-      p->hd.free_list.alloc_count++;
-      *((value *)new_root) = init;
-      return (boxroot)new_root;
-    }
-  }
-  return boxroot_create_slow(init);
-}
-
 static int setup;
 
-// Place an available pool in front of the ring and allocate from it.
-boxroot boxroot_create_slow(value init)
+// Set an available pool as current and allocate from it.
+boxroot boxroot_alloc_slot_slow(value init)
 {
   // We might be here because boxroot is not setup.
   if (!setup) {
     fprintf(stderr, "boxroot is not setup\n");
     return NULL;
   }
+  if (pools.current != NULL) {
+    DEBUGassert(is_full_pool(pools.current));
+    reclassify_pool(&pools.current, YOUNG);
+  }
   // TODO Latency: bound the number of roots allocated between each
   // minor collection by scheduling a minor collection?
   pool *p = find_available_pool();
   if (p == NULL) return NULL;
   assert(!is_full_pool(p));
-  return alloc_slot(init);
-}
-
-// hot path
-// assumes [is_pool_member(s, p)]
-static inline void free_slot(slot *s, pool *p)
-{
-  *s = (slot)p->hd.free_list.next;
-  p->hd.free_list.next = s;
-  if (DEBUG) assert(p->hd.free_list.alloc_count > 0);
-  if (UNLIKELY(is_alloc_threshold(--p->hd.free_list.alloc_count))) {
-    try_demote_pool(p);
-  }
+  return boxroot_alloc_slot(init);
 }
 
 /* }}} */
@@ -556,6 +420,8 @@ static inline void free_slot(slot *s, pool *p)
 extern inline value boxroot_get(boxroot root);
 extern inline value const * boxroot_get_ref(boxroot root);
 
+extern inline boxroot boxroot_alloc_slot(value init);
+
 boxroot boxroot_create_debug(value init)
 {
   CRITICAL_SECTION_BEGIN();
@@ -563,12 +429,14 @@ boxroot boxroot_create_debug(value init)
     if (Is_block(init) && Is_young(init)) ++stats.total_create_young;
     else ++stats.total_create_old;
   }
-  boxroot br = boxroot_create_inline(init);
+  boxroot br = boxroot_alloc_slot(init);
   CRITICAL_SECTION_END();
   return br;
 }
 
 extern inline boxroot boxroot_create(value init);
+
+extern inline void boxroot_free_slot(boxroot root);
 
 void boxroot_delete_debug(boxroot root)
 {
@@ -579,23 +447,25 @@ void boxroot_delete_debug(boxroot root)
     if (Is_block(v) && Is_young(v)) ++stats.total_delete_young;
     else ++stats.total_delete_old;
   }
-  boxroot_delete_inline(root);
+  boxroot_free_slot(root);
   CRITICAL_SECTION_END();
 }
 
 extern inline void boxroot_delete(boxroot root);
 
-static void boxroot_reallocate(boxroot *root, pool *p, value new_value)
+static void boxroot_reallocate(boxroot *root, value new_value)
 {
-  boxroot new = alloc_slot(new_value);
+  boxroot new = boxroot_alloc_slot(new_value);
   if (LIKELY(new != NULL)) {
-    free_slot((slot *)*root, p);
+    boxroot_free_slot(*root);
     *root = new;
   } else {
     // Better not fail in boxroot_modify. Expensive but fail-safe:
-    pool_remove(p);
-    p->hd.class = YOUNG;
-    ring_push_back(p, &pools.young_available);
+    // demote its pool into the young pools.
+    pool *p = get_pool_header((slot *)*root);
+    DEBUGassert(p->hd.class == OLD);
+    pool **source = (p == pools.old) ? &pools.old : &p;
+    reclassify_pool(source, YOUNG);
     **((value **)root) = new_value;
   }
 }
@@ -615,7 +485,7 @@ void boxroot_modify(boxroot *root, value new_value)
   } else {
     // We need to reallocate, but this reallocation happens at most once
     // between two minor collections.
-    boxroot_reallocate(root, p, new_value);
+    boxroot_reallocate(root, new_value);
   }
   CRITICAL_SECTION_END();
 }
