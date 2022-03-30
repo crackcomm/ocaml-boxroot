@@ -112,5 +112,5 @@ let () =
   done;
   let time_ns = (Sys.time () *. 1E9) /. (float_of_int num_iter) in
   Printf.printf "%8.2fns\n%!" time_ns;
-  if show_stats then impl.stats ();
+  if show_stats then (impl.stats (); print_newline ());
   impl.teardown ();

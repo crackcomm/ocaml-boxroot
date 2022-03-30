@@ -778,7 +778,7 @@ void boxroot_print_stats()
   long long total_scanning_work = stats.total_scanning_work_minor + stats.total_scanning_work_major;
   int ring_operations_per_pool = average(stats.ring_operations, stats.total_alloced_pools);
 
-  if (!boxroot_used() && total_scanning_work == 0) return;
+  if (stats.total_alloced_pools == 0) return;
 
   int64_t time_per_minor =
       stats.minor_collections ? stats.total_minor_time / stats.minor_collections : 0;
@@ -835,13 +835,17 @@ void boxroot_print_stats()
          stats.total_delete,
          stats.total_modify);
 
+  int young_hits_pct = stats.total_scanning_work_minor ?
+    (stats.young_hit * 100) / stats.total_scanning_work_minor
+    : -1;
+
   printf("is_young_block: %'lld\n"
          "young hits: %d%%\n"
          "get_pool_header: %'lld\n"
          "is_pool_member: %'lld\n"
          "is_empty_free_list: %'lld\n",
          stats.is_young,
-         (int)((stats.young_hit * 100) / stats.total_scanning_work_minor),
+         young_hits_pct,
          stats.get_pool_header,
          stats.is_pool_member,
          stats.is_empty_free_list);
