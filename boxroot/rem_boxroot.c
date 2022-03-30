@@ -177,10 +177,10 @@ static inline int is_young_block(value v)
 }
 
 // hot path
-static inline void remember(caml_domain_state *caml_state, slot *s)
+static inline void remember(caml_domain_state *dom_st, slot *s)
 {
   if (DEBUG) ++stats.remember;
-  add_to_ref_table(caml_state->ref_table, &(s->full));
+  Add_to_ref_table(dom_st, &(s->full));
 }
 
 /* }}} */
