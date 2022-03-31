@@ -11,8 +11,17 @@ Working version
 - Benchmark improvements.
   (Gabriel Scherer, Guillaume Munch-Maccagnoni)
 
-- Experiments with alternative implementations.
+### Experiments
+
+- Simple implementation with a doubly-linked list
   (Gabriel Scherer)
+
+- Implementation using the remembered set and a per-pool young
+  freelist.
+  (Gabriel Scherer, following an idea of Stephen Dolan)
+
+- Impact of inlining.
+  (Guillaume Munch-Maccagnoni)
 
 ### Packaging
 
