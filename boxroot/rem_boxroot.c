@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdatomic.h>
 
 #define CAML_NAME_SPACE
 #define CAML_INTERNALS
@@ -120,9 +121,9 @@ static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 struct stats {
   int minor_collections;
   int major_collections;
-  int total_create;
-  int total_delete;
-  int total_modify;
+  atomic_int total_create;
+  atomic_int total_delete;
+  atomic_int total_modify;
   long long total_scanning_work; // number of slots scanned (including free slots)
   long long useful_scanning_work; // number of non-free slots scanned
   int64_t total_major_time;
