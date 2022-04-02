@@ -161,9 +161,11 @@ static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 struct stats {
   int minor_collections;
   int major_collections;
-  int total_create;
-  int total_delete;
-  int total_modify;
+  intnat total_create_young;
+  intnat total_create_old;
+  intnat total_delete_young;
+  intnat total_delete_old;
+  intnat total_modify;
   long long total_scanning_work_minor;
   long long total_scanning_work_major;
   int64_t total_minor_time;
@@ -568,8 +570,12 @@ static inline boxroot root_create_classified(value init, int for_young_block)
 boxroot boxroot_create(value init)
 {
   CRITICAL_SECTION_BEGIN();
-  if (DEBUG) ++stats.total_create;
-  boxroot br = root_create_classified(init, is_young_block(init));
+  int is_young = is_young_block(init);
+  if (DEBUG) {
+    if (is_young) ++stats.total_create_young;
+    else ++stats.total_create_old;
+  }
+  boxroot br = root_create_classified(init, is_young);
   CRITICAL_SECTION_END();
   return br;
 }
@@ -583,7 +589,10 @@ void boxroot_delete(boxroot root)
   CRITICAL_SECTION_BEGIN();
   slot *s = (slot *)root;
   DEBUGassert(s);
-  if (DEBUG) ++stats.total_delete;
+  if (DEBUG) {
+    if (is_young_block(boxroot_get(root))) ++stats.total_delete_young;
+    else ++stats.total_delete_old;
+  }
   free_slot(s, get_pool_header(s));
   CRITICAL_SECTION_END();
 }
@@ -829,11 +838,18 @@ void boxroot_print_stats()
          ring_operations_per_pool);
 
 #if DEBUG != 0
-  printf("total created: %'d\n"
-         "total deleted: %'d\n"
-         "total modified: %'d\n",
-         stats.total_create,
-         stats.total_delete,
+  intnat total_create = stats.total_create_young + stats.total_create_old;
+  intnat total_delete = stats.total_delete_young + stats.total_delete_old;
+  intnat create_young_pct = total_create ?
+    (stats.total_create_young * 100 / total_create) : -1;
+  intnat delete_young_pct = total_delete ?
+    (stats.total_delete_young * 100 / total_delete) : -1;
+
+  printf("total created: %'ld (%ld%% young)\n"
+         "total deleted: %'ld (%ld%% young)\n"
+         "total modified: %'ld\n",
+         total_create, create_young_pct,
+         total_delete, delete_young_pct,
          stats.total_modify);
 
   int young_hits_pct = stats.total_scanning_work_minor ?
