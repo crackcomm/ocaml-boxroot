@@ -35,6 +35,15 @@
 
 /* }}} */
 
+/* {{{ Parameters */
+
+/* Log of the size of the pools (12 = 4KB, an OS page).
+   Recommended: 14. */
+#define POOL_LOG_SIZE 14
+#define POOL_SIZE ((size_t)1 << POOL_LOG_SIZE)
+
+/* }}} */
+
 /* {{{ Data types */
 
 /* Our main data structure is a doubly-linked list of "pools"
@@ -88,7 +97,6 @@ static_assert(POOL_SIZE / sizeof(slot) <= INT_MAX, "pool size too large");
 
 #define POOL_ROOTS_CAPACITY                                 \
   ((int)((POOL_SIZE - sizeof(struct header)) / sizeof(slot)))
-
 
 typedef struct pool {
   struct header hd;
@@ -288,7 +296,7 @@ static pool * get_empty_pool(void)
   ++stats.live_pools;
   if (stats.live_pools > stats.peak_pools) stats.peak_pools = stats.live_pools;
 
-  pool *p = alloc_uninitialised_pool();
+  pool *p = alloc_uninitialised_pool(POOL_SIZE);
   if (p == NULL) return NULL;
   ++stats.total_alloced_pools;
 
@@ -350,14 +358,6 @@ static void free_all_pools(void) {
 /* }}} */
 
 /* {{{ Allocation, deallocation */
-
-#if defined(__GNUC__)
-#define LIKELY(a) __builtin_expect(!!(a),1)
-#define UNLIKELY(a) __builtin_expect(!!(a),0)
-#else
-#define LIKELY(a) (a)
-#define UNLIKELY(a) (a)
-#endif
 
 static int setup;
 
@@ -662,11 +662,9 @@ void rem_boxroot_print_stats()
       stats.major_collections ? stats.total_major_time / stats.major_collections : 0;
 
   printf("POOL_LOG_SIZE: %d (%'d KiB, %'d roots/pool)\n"
-         "POOL_ALIGNMENT: %'d kiB\n"
          "DEBUG: %d\n"
          "OCAML_MULTICORE: %d\n",
          (int)POOL_LOG_SIZE, kib_of_pools((int)1, 1), (int)POOL_ROOTS_CAPACITY,
-         kib_of_pools(POOL_ALIGNMENT / POOL_SIZE,1),
          (int)DEBUG, (int)OCAML_MULTICORE);
 
   printf("total allocated pool: %'d (%'d MiB)\n"

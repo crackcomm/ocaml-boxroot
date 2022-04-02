@@ -31,6 +31,31 @@
 
 /* }}} */
 
+/* {{{ Parameters */
+
+/* Log of the size of the pools (12 = 4KB, an OS page).
+   Recommended: 14. */
+#define POOL_LOG_SIZE 14
+#define POOL_SIZE ((size_t)1 << POOL_LOG_SIZE)
+
+/* Take the slow path on deallocation every DEALLOC_THRESHOLD_SIZE
+   deallocations. */
+#define DEALLOC_THRESHOLD_SIZE_LOG 4 // 16
+#define DEALLOC_THRESHOLD_SIZE ((int)1 << DEALLOC_THRESHOLD_SIZE_LOG)
+/* The pool is divided in NUM_DEALLOC_THRESHOLD parts of equal size
+   DEALLOC_THRESHOLD_SIZE. */
+#define NUM_DEALLOC_THRESHOLD ((int)(POOL_SIZE / (DEALLOC_THRESHOLD_SIZE * sizeof(slot))))
+/* Old pools become candidate for young allocation below
+   LOW_COUNT_THRESHOLD / NUM_DEALLOC_THRESHOLD occupancy. This tries
+   to guarantee that minor scanning hits a good proportion of young
+   values. */
+#define LOW_COUNT_THRESHOLD (NUM_DEALLOC_THRESHOLD / 2)
+/* Pools become candidate for allocation below HIGH_COUNT_THRESHOLD /
+   NUM_DEALLOC_THRESHOLD occupancy. */
+#define HIGH_COUNT_THRESHOLD (NUM_DEALLOC_THRESHOLD - 1)
+
+/* }}} */
+
 /* {{{ Data types */
 
 typedef enum class {
@@ -48,6 +73,8 @@ struct header {
   int alloc_count;
   class class;
 };
+
+static_assert(POOL_SIZE / sizeof(slot) <= INT_MAX, "pool size too large");
 
 #define POOL_ROOTS_CAPACITY                                 \
   ((int)((POOL_SIZE - sizeof(struct header)) / sizeof(slot)))
@@ -246,7 +273,7 @@ static pool * ring_pop(pool **target)
 
 static pool * get_uninitialised_pool()
 {
-  pool *p = alloc_uninitialised_pool();
+  pool *p = alloc_uninitialised_pool(POOL_SIZE);
   if (p == NULL) return NULL;
   ++stats.total_alloced_pools;
   ring_link(p, p);
@@ -308,22 +335,6 @@ static void free_all_pools()
 /* }}} */
 
 /* {{{ Pool class management */
-
-/* Take the slow path on deallocation every DEALLOC_THRESHOLD_SIZE
-   deallocations. */
-#define DEALLOC_THRESHOLD_SIZE_LOG 4 // 16
-#define DEALLOC_THRESHOLD_SIZE ((int)1 << DEALLOC_THRESHOLD_SIZE_LOG)
-/* The pool is divided in NUM_DEALLOC_THRESHOLD parts of equal size
-   DEALLOC_THRESHOLD_SIZE. */
-#define NUM_DEALLOC_THRESHOLD ((int)(POOL_SIZE / (DEALLOC_THRESHOLD_SIZE * sizeof(slot))))
-/* Old pools become candidate for young allocation below
-   LOW_COUNT_THRESHOLD / NUM_DEALLOC_THRESHOLD occupancy. This tries
-   to guarantee that minor scanning hits a good proportion of young
-   values. */
-#define LOW_COUNT_THRESHOLD (NUM_DEALLOC_THRESHOLD / 2)
-/* Pools become candidate for allocation below HIGH_COUNT_THRESHOLD /
-   NUM_DEALLOC_THRESHOLD occupancy. */
-#define HIGH_COUNT_THRESHOLD (NUM_DEALLOC_THRESHOLD - 1)
 
 static_assert(0 < LOW_COUNT_THRESHOLD, "");
 static_assert(LOW_COUNT_THRESHOLD < HIGH_COUNT_THRESHOLD, "");
@@ -492,14 +503,6 @@ static void promote_young_pools()
 /* }}} */
 
 /* {{{ Allocation, deallocation */
-
-#if defined(__GNUC__)
-#define LIKELY(a) __builtin_expect(!!(a),1)
-#define UNLIKELY(a) __builtin_expect(!!(a),0)
-#else
-#define LIKELY(a) (a)
-#define UNLIKELY(a) (a)
-#endif
 
 static slot * alloc_slot_slow(int);
 
@@ -786,12 +789,10 @@ void boxroot_print_stats()
       stats.major_collections ? stats.total_major_time / stats.major_collections : 0;
 
   printf("POOL_LOG_SIZE: %d (%'d KiB, %'d roots/pool)\n"
-         "POOL_ALIGNMENT: %'d kiB\n"
          "DEBUG: %d\n"
          "OCAML_MULTICORE: %d\n"
          "WITH_EXPECT: 1\n",
          (int)POOL_LOG_SIZE, kib_of_pools((int)1, 1), (int)POOL_ROOTS_CAPACITY,
-         kib_of_pools(POOL_ALIGNMENT / POOL_SIZE,1),
          (int)DEBUG, (int)OCAML_MULTICORE);
 
   printf("total allocated pool: %'d (%'d MiB)\n"

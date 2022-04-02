@@ -4,12 +4,12 @@
 #include <stdlib.h>
 #include <errno.h>
 
-pool * alloc_uninitialised_pool()
+pool * alloc_uninitialised_pool(size_t size)
 {
   void *p = NULL;
   // TODO: portability?
   // Win32: p = _aligned_malloc(size, alignment);
-  int err = posix_memalign(&p, POOL_ALIGNMENT, POOL_SIZE);
+  int err = posix_memalign(&p, size, size);
   assert(err != EINVAL);
   if (err == ENOMEM) return NULL;
   assert(p != NULL);

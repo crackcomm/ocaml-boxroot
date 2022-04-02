@@ -1,19 +1,11 @@
 #ifndef BOXROOT_PLATFORM_H
 #define BOXROOT_PLATFORM_H
 
-#include <stddef.h>
-
-/* Log of the size of the pools (12 = 4KB, an OS page).
-   Recommended: 14. */
-#define POOL_LOG_SIZE 14
-
-#define POOL_SIZE ((size_t)1 << POOL_LOG_SIZE)
-#define POOL_ALIGNMENT POOL_SIZE
-
 #ifdef CAML_INTERNALS
 
 #include <assert.h>
 #include <limits.h>
+#include <stddef.h>
 
 /* Check integrity of pool structure after each scan, and print
    additional statistics? (slow)
@@ -23,14 +15,24 @@
 #define DEBUGassert(x) assert(x)
 #else
 #define DEBUG 0
+#if defined(__GNUC__)
+#define DEBUGassert(x) do { if (!(x)) { __builtin_unreachable(); } } while (0)
+#else
 #define DEBUGassert(x) ((void)0)
 #endif
+#endif
 
-static_assert(POOL_SIZE / sizeof(void*) <= INT_MAX, "pool size too large");
+#if defined(__GNUC__)
+#define LIKELY(a) __builtin_expect(!!(a),1)
+#define UNLIKELY(a) __builtin_expect(!!(a),0)
+#else
+#define LIKELY(a) (a)
+#define UNLIKELY(a) (a)
+#endif
 
 typedef struct pool pool;
 
-pool* alloc_uninitialised_pool();
+pool* alloc_uninitialised_pool(size_t size);
 void free_pool(struct pool *p);
 
 #endif // CAML_INTERNALS
