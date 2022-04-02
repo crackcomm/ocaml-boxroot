@@ -5,6 +5,7 @@ fn build_boxroot(ocaml_path: &str) {
     config.include("vendor/boxroot/");
     config.file("vendor/boxroot/boxroot.c");
     config.file("vendor/boxroot/ocaml_hooks.c");
+    config.file("vendor/boxroot/platform.c");
 
     config.compile("libocaml-boxroot.a");
 }

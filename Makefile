@@ -79,7 +79,7 @@ run-local_roots: all
 	echo "Benchmark: local_roots" \
 	&& echo "---" \
 	$(foreach N, 1 2 $(if $(TEST_MORE),3 4,) 5 10 100 1000, \
-	  $(foreach ROOT, local boxroot $(if $(TEST_MORE), dll_boxroot rem_boxroot generational,), \
+	  $(foreach ROOT, local boxroot $(if $(TEST_MORE), dll_boxroot rem_boxroot naive generational,), \
 	    && (N=$(N) ROOT=$(ROOT) dune exec ./benchmarks/local_roots.exe) \
 	  ) && echo "---")
 

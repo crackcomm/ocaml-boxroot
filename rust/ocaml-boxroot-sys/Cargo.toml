@@ -10,10 +10,8 @@ repository = "https://gitlab.com/ocaml-rust/ocaml-boxroot"
 keywords = ["ocaml", "rust", "ffi"]
 include = ["build.rs",
            "src/*.rs",
-           "vendor/boxroot/boxroot.c",
-           "vendor/boxroot/boxroot.h",
-           "vendor/boxroot/ocaml_hooks.c",
-           "vendor/boxroot/ocaml_hooks.h",
+           "vendor/boxroot/*.c",
+           "vendor/boxroot/*.h",
            "vendor/README.md",
            "vendor/Changes.md",
            "README.md",

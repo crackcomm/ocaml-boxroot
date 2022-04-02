@@ -29,18 +29,7 @@
 #endif
 
 #include "ocaml_hooks.h"
-
-/* }}} */
-
-/* {{{ Parameters */
-
-#if defined(BOXROOT_DEBUG) && (BOXROOT_DEBUG == 1)
-#define DEBUG 1
-#define DEBUGassert(x) assert(x)
-#else
-#define DEBUG 0
-#define DEBUGassert(x) ((void)0)
-#endif
+#include "platform.h"
 
 /* }}} */
 
@@ -341,8 +330,10 @@ void dll_boxroot_print_stats()
   int scanning_work_major = average(stats.total_scanning_work_major, stats.major_collections);
   long long total_scanning_work = stats.total_scanning_work_minor + stats.total_scanning_work_major;
 
-  int64_t time_per_minor = stats.total_minor_time / stats.minor_collections;
-  int64_t time_per_major = stats.total_major_time / stats.major_collections;
+  int64_t time_per_minor = stats.minor_collections ?
+    stats.total_minor_time / stats.minor_collections : 0;
+  int64_t time_per_major = stats.major_collections ?
+    stats.total_major_time / stats.major_collections : 0;
 
   printf("work per minor: %'d\n"
          "work per major: %'d\n"

@@ -31,13 +31,43 @@ value local_fixpoint(value f, value x)
   }
 }
 
+/* Naive version with boxroots, callee-roots */
+
+#include "../boxroot/boxroot.h"
+
+int compare_val_naive(value x, value y)
+{
+  boxroot xr = boxroot_create(x);
+  boxroot yr = boxroot_create(y);
+  int res = Double_val(boxroot_get(xr)) == Double_val(boxroot_get(yr));
+  boxroot_delete(yr);
+  boxroot_delete(xr);
+  return res;
+}
+
+value naive_fixpoint(value f, value x)
+{
+  boxroot fr = boxroot_create(f);
+  boxroot xr = boxroot_create(x);
+  boxroot yr = boxroot_create(caml_callback(boxroot_get(fr), boxroot_get(xr)));
+  value res;
+  if (compare_val_naive(boxroot_get(xr),boxroot_get(yr))) {
+    res = boxroot_get(yr);
+  } else {
+    res = local_fixpoint(boxroot_get(fr), boxroot_get(yr));
+  }
+  boxroot_delete(yr);
+  boxroot_delete(xr);
+  boxroot_delete(fr);
+  return res;
+}
+
 
 /* a different version that uses our 'boxroot' library to implement
    a "caller roots" convention: a function is passed values that
    have already been rooted into boxroots, and it may itself pass them
    around to its own callee without re-rooting. */
 
-#include "../boxroot/boxroot.h"
 #define MY_PREFIX box
 #include "local_roots_gen_boxroot.h"
 #undef MY_PREFIX

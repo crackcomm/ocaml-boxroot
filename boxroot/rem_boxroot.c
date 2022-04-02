@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdatomic.h>
 
 #define CAML_NAME_SPACE
 #define CAML_INTERNALS
@@ -30,22 +31,7 @@
 #endif
 
 #include "ocaml_hooks.h"
-
-/* }}} */
-
-/* {{{ Enable debug mode? */
-
-/* Debug mode (slow) is enabled by defining BOXROOT_DEBUG. It:
-   - performs runtime checks along the way
-   - checks full integrity of pool structure after each scan
-   - prints additional statistics. */
-#if defined(BOXROOT_DEBUG) && (BOXROOT_DEBUG == 1)
-#define DEBUG 1
-#define DEBUGassert(x) assert(x)
-#else
-#define DEBUG 0
-#define DEBUGassert(x) ((void)0)
-#endif
+#include "platform.h"
 
 /* }}} */
 
@@ -54,13 +40,7 @@
 /* Log of the size of the pools (12 = 4KB, an OS page).
    Recommended: 14. */
 #define POOL_LOG_SIZE 14
-
-/* }}} */
-
-/* {{{ Setup */
-
 #define POOL_SIZE ((size_t)1 << POOL_LOG_SIZE)
-#define POOL_ALIGNMENT POOL_SIZE
 
 /* }}} */
 
@@ -118,7 +98,6 @@ static_assert(POOL_SIZE / sizeof(slot) <= INT_MAX, "pool size too large");
 #define POOL_ROOTS_CAPACITY                                 \
   ((int)((POOL_SIZE - sizeof(struct header)) / sizeof(slot)))
 
-
 typedef struct pool {
   struct header hd;
   slot roots[POOL_ROOTS_CAPACITY];
@@ -150,9 +129,9 @@ static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 struct stats {
   int minor_collections;
   int major_collections;
-  int total_create;
-  int total_delete;
-  int total_modify;
+  atomic_int total_create;
+  atomic_int total_delete;
+  atomic_int total_modify;
   long long total_scanning_work; // number of slots scanned (including free slots)
   long long useful_scanning_work; // number of non-free slots scanned
   int64_t total_major_time;
@@ -207,33 +186,10 @@ static inline int is_young_block(value v)
 }
 
 // hot path
-static inline void remember(caml_domain_state *caml_state, slot *s)
+static inline void remember(caml_domain_state *dom_st, slot *s)
 {
   if (DEBUG) ++stats.remember;
-  add_to_ref_table(caml_state->ref_table, &(s->full));
-}
-
-/* }}} */
-
-/* {{{ Platform-specific allocation */
-
-static void * alloc_uninitialised_pool(void)
-{
-  void *p = NULL;
-  // TODO: portability?
-  // Win32: p = _aligned_malloc(size, alignment);
-  int err = posix_memalign(&p, POOL_ALIGNMENT, POOL_SIZE);
-  assert(err != EINVAL);
-  if (err == ENOMEM) return NULL;
-  assert(p != NULL);
-  ++stats.total_alloced_pools;
-  return p;
-}
-
-static void free_pool(pool *p) {
-    ++stats.total_freed_pools;
-    // Win32: _aligned_free(p);
-    free(p);
+  Add_to_ref_table(dom_st, &(s->full));
 }
 
 /* }}} */
@@ -340,8 +296,9 @@ static pool * get_empty_pool(void)
   ++stats.live_pools;
   if (stats.live_pools > stats.peak_pools) stats.peak_pools = stats.live_pools;
 
-  pool *p = alloc_uninitialised_pool();
+  pool *p = alloc_uninitialised_pool(POOL_SIZE);
   if (p == NULL) return NULL;
+  ++stats.total_alloced_pools;
 
   ring_link(p, p);
   p->hd.major_free_list = empty_free_list(p);
@@ -394,20 +351,13 @@ static void free_all_pools(void) {
   while (pools != NULL) {
     pool *p = ring_pop(&pools);
     free_pool(p);
+    ++stats.total_freed_pools;
   }
 }
 
 /* }}} */
 
 /* {{{ Allocation, deallocation */
-
-#if defined(__GNUC__)
-#define LIKELY(a) __builtin_expect(!!(a),1)
-#define UNLIKELY(a) __builtin_expect(!!(a),0)
-#else
-#define LIKELY(a) (a)
-#define UNLIKELY(a) (a)
-#endif
 
 static int setup;
 
@@ -643,6 +593,7 @@ static void free_empty_pools(void) {
         --keep_empty_pools;
       } else {
         free_pool(pool_remove(p));
+        ++stats.total_freed_pools;
       }
     }
     p = next;
@@ -711,11 +662,9 @@ void rem_boxroot_print_stats()
       stats.major_collections ? stats.total_major_time / stats.major_collections : 0;
 
   printf("POOL_LOG_SIZE: %d (%'d KiB, %'d roots/pool)\n"
-         "POOL_ALIGNMENT: %'d kiB\n"
          "DEBUG: %d\n"
          "OCAML_MULTICORE: %d\n",
          (int)POOL_LOG_SIZE, kib_of_pools((int)1, 1), (int)POOL_ROOTS_CAPACITY,
-         kib_of_pools(POOL_ALIGNMENT / POOL_SIZE,1),
          (int)DEBUG, (int)OCAML_MULTICORE);
 
   printf("total allocated pool: %'d (%'d MiB)\n"
