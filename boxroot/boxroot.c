@@ -543,7 +543,7 @@ static void validate_all_pools()
 }
 
 // returns the amount of work done
-static int scan_pool(scanning_action action, void *data, pool *pl)
+static int scan_pool_gen(scanning_action action, void *data, pool *pl)
 {
   int allocs_to_find = pl->hd.free_list.alloc_count;
   slot *current = pl->roots;
@@ -559,6 +559,54 @@ static int scan_pool(scanning_action action, void *data, pool *pl)
     ++current;
   }
   return current - pl->roots;
+}
+
+/* Benchmark results for minor scanning:
+   20% faster for young hits=95%
+   20% faster for young hits=50% (random)
+   90% faster for young_hit=10% (random)
+   280% faster for young hits=0%
+*/
+static int scan_pool_oldify_one(scanning_action action, void *data, pool *pl)
+{
+#if OCAML_MULTICORE
+  /* If a <= b - 2 then
+     a < x && x < b  <=>  x - a - 1 <= x - b - 2 (unsigned comparison)
+  */
+  uintnat young_start = (uintnat)caml_minor_heaps_base + 1;
+  uintnat young_range = (uintnat)caml_minor_heaps_end - 1 - young_start;
+#else
+  uintnat young_start = (uintnat)Caml_state->young_start;
+  uintnat young_range = (uintnat)Caml_state->young_end - young_start;
+  (void)action;
+#endif
+  slot *start = pl->roots;
+  slot *end = start + POOL_ROOTS_CAPACITY;
+  for (slot *i = start; i < end; i++) {
+    value v = (value)*i;
+    // If v falls within the young range it is likely that it is a block
+    if ((uintnat)v - young_start <= young_range && Is_block(v)) {
+      ++stats.young_hit;
+#if OCAML_MULTICORE
+      CALL_GC_ACTION(action, data, v, (value *)i);
+#else
+      CALL_GC_ACTION(caml_oldify_one, data, v, (value *)i);
+#endif
+    }
+  }
+  return POOL_ROOTS_CAPACITY;
+}
+
+static int scan_pool(scanning_action action, void *data, pool *pl)
+{
+#if OCAML_MULTICORE
+  if (boxroot_in_minor_collection())
+#else
+  if (action == &caml_oldify_one)
+#endif
+    return scan_pool_oldify_one(action, data, pl);
+  else
+    return scan_pool_gen(action, data, pl);
 }
 
 static int scan_pools(scanning_action action, void *data)
@@ -672,12 +720,18 @@ void boxroot_print_stats()
          stats.total_freed_pools,
          kib_of_pools(stats.total_freed_pools, 2));
 
+  int young_hits_pct = stats.total_scanning_work_minor ?
+    (stats.young_hit * 100) / stats.total_scanning_work_minor
+    : -1;
+
   printf("work per minor: %'d\n"
          "work per major: %'d\n"
-         "total scanning work: %'lld (%'lld minor, %'lld major)\n",
+         "total scanning work: %'lld (%'lld minor, %'lld major)\n"
+         "young hits: %d%%\n",
          scanning_work_minor,
          scanning_work_major,
-         total_scanning_work, stats.total_scanning_work_minor, stats.total_scanning_work_major);
+         total_scanning_work, stats.total_scanning_work_minor, stats.total_scanning_work_major,
+         young_hits_pct);
 
 #if defined(POSIX_CLOCK)
   printf("average time per minor: %'lldns\n"
@@ -710,15 +764,9 @@ void boxroot_print_stats()
          total_delete, delete_young_pct,
          stats.total_modify);
 
-  int young_hits_pct = stats.total_scanning_work_minor ?
-    (stats.young_hit * 100) / stats.total_scanning_work_minor
-    : -1;
-
-  printf("young hits: %d%%\n"
-         "get_pool_header: %'lld\n"
+  printf("get_pool_header: %'lld\n"
          "is_pool_member: %'lld\n"
          "is_empty_free_list: %'lld\n",
-         young_hits_pct,
          stats.get_pool_header,
          stats.is_pool_member,
          stats.is_empty_free_list);
