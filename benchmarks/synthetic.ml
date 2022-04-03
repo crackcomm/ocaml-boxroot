@@ -5,6 +5,7 @@ module Ref = Ref_config.Ref
 
 IMPLEM=boxroot N=6 \
 SMALL_ROOTS=1_000 \
+YOUNG_RATIO=1 \
 LARGE_ROOTS=0 \
 SMALL_ROOT_PROMOTION_RATE=0.01 \
 LARGE_ROOT_PROMOTION_RATE=0 \
@@ -18,7 +19,8 @@ GC_SURVIVAL_RATE=0.5 \
 let wrong_usage () =
   Printf.eprintf "Expected environment variables:
    N: log_2 of the number of minor generations
-   SMALL_ROOTS: the number of small roots allocated (in the minor heap) per minor collection
+   SMALL_ROOTS: the number of small roots allocated per minor collection
+   YOUNG_RATIO: the ratio of small roots containing a newly allocated value in the minor heap
    LARGE_ROOTS: the number of large roots allocated (in the major heap) per minor collection
    SMALL_ROOT_PROMOTION_RATE: the survival rate for small roots allocated in the current minor heap
    LARGE_ROOT_PROMOTION_RATE: the survival rate for large roots allocated in the current minor heap
@@ -46,8 +48,16 @@ let get_param reader param =
     Printf.eprintf "Environment variable %s missing or invalid.%!" param;
     wrong_usage ()
 
+let old_value =
+  let v = Some 42 in
+  Gc.minor();
+  v
+
 let small_roots_per_minor =
   get_param int_of_string "SMALL_ROOTS"
+
+let young_ratio =
+  get_param float_of_string "YOUNG_RATIO"
 
 let large_roots_per_minor =
   get_param int_of_string "LARGE_ROOTS"
@@ -158,7 +168,11 @@ let run n =
       in
 
       let allocate_small_root () =
-        let value = Some !small_count in
+        let value =
+          if within young_ratio
+          then Some !small_count
+          else old_value
+        in
         let root = Ref.create value in
         incr small_count;
         if within small_root_promotion_rate
