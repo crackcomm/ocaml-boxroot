@@ -195,29 +195,30 @@ would normally be amortized by OCaml computations.
 ```
 $ make run-globroots TEST_MORE=1
 ---
-gc: 1.49s            
+gc: 1.45s            
 ---
-boxroot: 1.48s       
+boxroot: 1.32s       
 ---
-ocaml: 1.40s         
+ocaml: 1.35s         
 ---
-dll_boxroot: 1.27s   
+dll_boxroot: 1.29s   
 ---
 rem_boxroot: 1.29s   
 ---
 generational: 1.11s  
 ---
-global: 1.25s        
+global: 1.34s        
 ---
 ```
 
 In this benchmark, there are about 67000 minor collections and 40000
-major collections. List-based and remembered-set implementations
-perform well, whereas `boxroot` is slower. This is due to the fact
-that it can have to scan on the order of a full memory pool at every
-minor collection even if there are only a few young roots, for a pool
-size currently chosen large (16KB). Nevertheless, the overhead per
-minor collection is only about 2µs.
+major collections. List-based and remembered-set-based implementations
+are expected to perform well, whereas `boxroot` has to scan on the
+order of a full memory pool at every minor collection even if there
+are only a few young roots, for a pool size currently chosen large
+(16KB). This overhead would have been noticeable in this benchmark,
+but it has been reduced thanks to an optimisation brought to scanning
+during minor collection.
 
 ### Local roots benchmark
 
