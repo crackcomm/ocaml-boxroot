@@ -1,7 +1,12 @@
 #ifndef BOXROOT_H
 #define BOXROOT_H
 
+#define CAML_NAME_SPACE
+
 #include <caml/mlvalues.h>
+#include <caml/minor_gc.h>
+#include <caml/address_class.h>
+#include "platform.h"
 
 typedef struct boxroot_private* boxroot;
 
@@ -10,7 +15,7 @@ typedef struct boxroot_private* boxroot;
    as long as the boxroot lives or until it is modified. A return
    value of `NULL` indicates a failure of allocation of the backing
    store. */
-boxroot boxroot_create(value);
+inline boxroot boxroot_create(value);
 
 /* `boxroot_get(r)` returns the contained value, subject to the usual
    discipline for non-rooted values. `boxroot_get_ref(r)` returns a
@@ -24,7 +29,7 @@ inline value const * boxroot_get_ref(boxroot r) { return (value *)r; }
 /* `boxroot_delete(r)` deallocates the boxroot `r`. The value is no
    longer considered as a root by the OCaml GC. The argument must be
    non-null. */
-void boxroot_delete(boxroot);
+inline void boxroot_delete(boxroot);
 
 /* `boxroot_modify(&r,v)` changes the value kept alive by the boxroot
    `r` to `v`. It is equivalent to the following:
@@ -50,5 +55,75 @@ void boxroot_teardown();
 
 /* Show some statistics on the standard output. */
 void boxroot_print_stats();
+
+
+/* Private implementation */
+
+typedef struct {
+  void *next;
+  int alloc_count;
+} boxroot_fl;
+
+extern boxroot_fl *boxroot_current_fl;
+
+boxroot boxroot_alloc_slot_slow(value);
+
+inline boxroot boxroot_alloc_slot(value init)
+{
+  boxroot_fl *fl = boxroot_current_fl;
+  void *new_root = fl->next;
+  if (UNLIKELY(new_root == fl))
+    // pool full, not allocated or not initialized
+    return boxroot_alloc_slot_slow(init);
+  fl->next = *((void **)new_root);
+  fl->alloc_count++;
+  *((value *)new_root) = init;
+  return (boxroot)new_root;
+}
+
+/* Log of the size of the pools (12 = 4KB, an OS page).
+   Recommended: 14. */
+#define POOL_LOG_SIZE 14
+#define POOL_SIZE ((size_t)1 << POOL_LOG_SIZE)
+/* Move a pool towards the front of its ring for selection as current
+   pool every DEALLOC_THRESHOLD deallocations. Change this with
+   benchmarks in hand. */
+#define DEALLOC_THRESHOLD ((int)POOL_SIZE / 2)
+
+void boxroot_try_demote_pool(boxroot_fl *p);
+
+#define Get_pool_header(s)                                \
+  ((void *)((uintptr_t)s & ~((uintptr_t)POOL_SIZE - 1)))
+
+inline void boxroot_free_slot(boxroot root)
+{
+  void **s = (void **)root;
+  boxroot_fl *fl = Get_pool_header(s);
+  *s = (void *)fl->next;
+  fl->next = s;
+  int alloc_count = --fl->alloc_count;
+  if (UNLIKELY((alloc_count & (DEALLOC_THRESHOLD - 1)) == 0)) {
+    boxroot_try_demote_pool(fl);
+  }
+}
+
+#if (defined(ENABLE_BOXROOT_MUTEX) && (ENABLE_BOXROOT_MUTEX == 1)) || \
+  (defined(BOXROOT_DEBUG) && (BOXROOT_DEBUG == 1))
+#define BOXROOT_NO_INLINE
+#endif
+
+#ifdef BOXROOT_NO_INLINE
+
+boxroot boxroot_create_debug(value v);
+void boxroot_delete_debug(boxroot root);
+inline boxroot boxroot_create(value v) { return boxroot_create_debug(v); }
+inline void boxroot_delete(boxroot root) { boxroot_delete_debug(root); }
+
+#else
+
+inline boxroot boxroot_create(value v) { return boxroot_alloc_slot(v); }
+inline void boxroot_delete(boxroot root) { boxroot_free_slot(root); }
+
+#endif // BOXROOT_NO_INLINE
 
 #endif // BOXROOT_H

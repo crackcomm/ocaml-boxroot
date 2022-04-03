@@ -97,25 +97,25 @@ This benchmark creates a lot of roots alive at the same time.
 $ make run-perm_count TEST_MORE=1
 Benchmark: perm_count
 ---
-gc: 2.17s            
+gc: 2.10s            
 count: 3628800
 ---
-boxroot: 2.05s       
+boxroot: 1.87s       
 count: 3628800
 ---
-ocaml: 2.14s         
+ocaml: 2.05s         
 count: 3628800
 ---
-dll_boxroot: 2.15s   
+dll_boxroot: 2.08s   
 count: 3628800
 ---
-rem_boxroot: 2.04s   
+rem_boxroot: 1.96s   
 count: 3628800
 ---
-generational: 5.59s  
+generational: 5.51s  
 count: 3628800
 ---
-global: 53.79s       
+global: 47.89s       
 count: 3628800
 ---
 ```
@@ -153,19 +153,19 @@ long-lived.
 $ make run-synthetic TEST_MORE=1
 Benchmark: synthetic
 ---
-gc: 7.30s            
+gc: 7.02s            
 ---
-boxroot: 6.18s       
+boxroot: 5.84s       
 ---
-ocaml: 7.21s         
+ocaml: 7.02s         
 ---
-dll_boxroot: 6.63s   
+dll_boxroot: 6.33s   
 ---
-rem_boxroot: 6.04s   
+rem_boxroot: 5.99s   
 ---
-generational: 11.29s 
+generational: 11.00s 
 ---
-global: 16.38s       
+global: 15.45s       
 ---
 ```
 
@@ -195,29 +195,30 @@ would normally be amortized by OCaml computations.
 ```
 $ make run-globroots TEST_MORE=1
 ---
-gc: 1.37s            
+gc: 1.45s            
 ---
-boxroot: 1.23s       
+boxroot: 1.32s       
 ---
-ocaml: 1.47s         
+ocaml: 1.35s         
 ---
-dll_boxroot: 1.05s   
+dll_boxroot: 1.29s   
 ---
-rem_boxroot: 1.13s   
+rem_boxroot: 1.29s   
 ---
-generational: 1.24s  
+generational: 1.11s  
 ---
-global: 1.36s        
+global: 1.34s        
 ---
 ```
 
 In this benchmark, there are about 67000 minor collections and 40000
-major collections. List-based implementations perform well, whereas
-`boxroot` is slower. In the way it is currently implemented, it can
-have to scan on the order of a full memory pool at every minor
-collection even if there are only a few young roots, for a pool size
-currently chosen large (16KB). Nevertheless, the overhead compared to
-`dll_boxroot` is only 2µs per minor collection.
+major collections. List-based and remembered-set-based implementations
+are expected to perform well, whereas `boxroot` has to scan on the
+order of a full memory pool at every minor collection even if there
+are only a few young roots, for a pool size currently chosen large
+(16KB). This overhead would have been noticeable in this benchmark,
+but it has been reduced thanks to an optimisation brought to scanning
+during minor collection.
 
 ### Local roots benchmark
 
@@ -300,69 +301,78 @@ The work is done by `boxroot_fixpoint_rooted`, but we need a
 expected by OCaml `external` declarations to a caller-root convention.
 (This wrapper also adds some overhead for small call depths.)
 
+The `naive` test uses boxroots in a callee-roots discipline.
+
 ```
-Benchmark: local_roots TEST_MORE=1
+Benchmark: local_roots
 ---
-local_roots(ROOT=local       , N=1):    12.31ns
-local_roots(ROOT=boxroot     , N=1):    19.44ns
-local_roots(ROOT=dll_boxroot , N=1):    30.27ns
-local_roots(ROOT=rem_boxroot , N=1):    22.98ns
-local_roots(ROOT=generational, N=1):    48.88ns
+local_roots(ROOT=local       , N=1):    12.51ns
+local_roots(ROOT=boxroot     , N=1):    13.90ns
+local_roots(ROOT=dll_boxroot , N=1):    30.16ns
+local_roots(ROOT=rem_boxroot , N=1):    22.40ns
+local_roots(ROOT=naive       , N=1):    20.87ns
+local_roots(ROOT=generational, N=1):    50.76ns
 ---
-local_roots(ROOT=local       , N=2):    23.35ns
-local_roots(ROOT=boxroot     , N=2):    29.09ns
-local_roots(ROOT=dll_boxroot , N=2):    44.52ns
-local_roots(ROOT=rem_boxroot , N=2):    35.25ns
-local_roots(ROOT=generational, N=2):   105.56ns
+local_roots(ROOT=local       , N=2):    23.47ns
+local_roots(ROOT=boxroot     , N=2):    22.54ns
+local_roots(ROOT=dll_boxroot , N=2):    48.88ns
+local_roots(ROOT=rem_boxroot , N=2):    33.19ns
+local_roots(ROOT=naive       , N=2):    32.75ns
+local_roots(ROOT=generational, N=2):    99.74ns
 ---
-local_roots(ROOT=local       , N=3):    34.63ns
-local_roots(ROOT=boxroot     , N=3):    37.63ns
-local_roots(ROOT=dll_boxroot , N=3):    60.24ns
-local_roots(ROOT=rem_boxroot , N=3):    47.30ns
-local_roots(ROOT=generational, N=3):   137.82ns
+local_roots(ROOT=local       , N=3):    34.40ns
+local_roots(ROOT=boxroot     , N=3):    30.75ns
+local_roots(ROOT=dll_boxroot , N=3):    58.05ns
+local_roots(ROOT=rem_boxroot , N=3):    43.53ns
+local_roots(ROOT=naive       , N=3):    44.02ns
+local_roots(ROOT=generational, N=3):   168.83ns
 ---
-local_roots(ROOT=local       , N=4):    45.30ns
-local_roots(ROOT=boxroot     , N=4):    47.75ns
-local_roots(ROOT=dll_boxroot , N=4):    72.60ns
-local_roots(ROOT=rem_boxroot , N=4):    57.68ns
-local_roots(ROOT=generational, N=4):   174.14ns
+local_roots(ROOT=local       , N=4):    43.93ns
+local_roots(ROOT=boxroot     , N=4):    39.30ns
+local_roots(ROOT=dll_boxroot , N=4):    76.50ns
+local_roots(ROOT=rem_boxroot , N=4):    53.42ns
+local_roots(ROOT=naive       , N=4):    52.33ns
+local_roots(ROOT=generational, N=4):   179.81ns
 ---
-local_roots(ROOT=local       , N=5):    57.73ns
-local_roots(ROOT=boxroot     , N=5):    56.59ns
-local_roots(ROOT=dll_boxroot , N=5):    90.08ns
-local_roots(ROOT=rem_boxroot , N=5):    69.86ns
-local_roots(ROOT=generational, N=5):   217.36ns
+local_roots(ROOT=local       , N=5):    57.20ns
+local_roots(ROOT=boxroot     , N=5):    45.76ns
+local_roots(ROOT=dll_boxroot , N=5):    91.09ns
+local_roots(ROOT=rem_boxroot , N=5):    63.95ns
+local_roots(ROOT=naive       , N=5):    65.62ns
+local_roots(ROOT=generational, N=5):   214.11ns
 ---
-local_roots(ROOT=local       , N=10):   117.16ns
-local_roots(ROOT=boxroot     , N=10):   102.86ns
-local_roots(ROOT=dll_boxroot , N=10):   166.69ns
-local_roots(ROOT=rem_boxroot , N=10):   127.74ns
-local_roots(ROOT=generational, N=10):   407.40ns
+local_roots(ROOT=local       , N=10):   113.09ns
+local_roots(ROOT=boxroot     , N=10):    99.51ns
+local_roots(ROOT=dll_boxroot , N=10):   157.87ns
+local_roots(ROOT=rem_boxroot , N=10):   116.69ns
+local_roots(ROOT=naive       , N=10):   126.17ns
+local_roots(ROOT=generational, N=10):   412.68ns
 ---
-local_roots(ROOT=local       , N=100):  1267.35ns
-local_roots(ROOT=boxroot     , N=100):   954.10ns
-local_roots(ROOT=dll_boxroot , N=100):  1476.02ns
-local_roots(ROOT=rem_boxroot , N=100):  1196.25ns
-local_roots(ROOT=generational, N=100):  3726.56ns
+local_roots(ROOT=local       , N=100):  1170.40ns
+local_roots(ROOT=boxroot     , N=100):   791.36ns
+local_roots(ROOT=dll_boxroot , N=100):  1533.67ns
+local_roots(ROOT=rem_boxroot , N=100):  1843.33ns
+local_roots(ROOT=naive       , N=100):  1206.28ns
+local_roots(ROOT=generational, N=100):  3672.42ns
 ---
-local_roots(ROOT=local       , N=1000): 13222.97ns
-local_roots(ROOT=boxroot     , N=1000):  8940.01ns
-local_roots(ROOT=dll_boxroot , N=1000): 14795.19ns
-local_roots(ROOT=rem_boxroot , N=1000): 11319.29ns
-local_roots(ROOT=generational, N=1000): 35870.84ns
+local_roots(ROOT=local       , N=1000): 12931.25ns
+local_roots(ROOT=boxroot     , N=1000):  7710.52ns
+local_roots(ROOT=dll_boxroot , N=1000): 14426.69ns
+local_roots(ROOT=rem_boxroot , N=1000): 10645.21ns
+local_roots(ROOT=naive       , N=1000): 13243.58ns
+local_roots(ROOT=generational, N=1000): 35637.49ns
 ---
 ```
 
-We see that, for a call depth of 1, the boxroot version is about 60%
-slower than the local-roots version. This is a good result: the amount
-of computation is very small, and there is an up-front cost for
-wrapping the function, so we could initially expect a large overhead
-for boxroot over local roots.
+We see that, despite the up-front cost of wrapping the function,
+`boxroot`s are equivalent to or outperform OCaml's local roots. More
+precisely, `boxroots` are slightly more expensive than local roots by
+following the same callee-roots discipline, and the caller-roots
+discipline offers huge saves in this benchmark.
 
-The performance advantage of local roots over boxroots disappears with
-greater values of N in this micro-benchmark. A high value of N is not
-only relevant for deep call chains, but also of functions containing
-many calls to functions manipulating ocaml values.
+(A high value of N is not only relevant for deep call chains, but also
+of functions containing many calls to functions manipulating ocaml
+values.)
 
 Our conclusions:
 - Using boxroots is competitive with local roots.
@@ -399,30 +409,22 @@ optimisation when all roots have been found ensures that programs that
 use few roots throughout the life of the program only pay for what
 they use.
 
-The memory pools are managed in several rings, distinguished by their
-*class* and their *occupancy*. In addition to distinguishing the pools
-in use (which need to be scanned) from the pools that are free (and
-need not be scanned), the class distinguishes pools according to OCaml
-generations. A pool is *young* if and only if it is allowed to contain
-pointers to the minor heap. During minor collection, we only need to
-scan young pools. At the end of the minor collection, the young pools,
-now guaranteed to no longer point to any young value, are promoted
-into *old* pools.
+The memory pools are managed in several rings, according to their
+*class*. The class class distinguishes pools according to OCaml
+generations, as well as pools that are free (which need not be
+scanned). A pool is *young* if it is allowed to contain pointers to
+the minor heap. During minor collection, we only need to scan young
+pools. At the end of the minor collection, the young pools, now
+guaranteed to no longer point to any young value, are promoted into
+*old* pools.
 
-In addition to distinguishing pools that are available for allocation
-from pools that are (quasi-)full, occupancy distinguishes the old
-pools that are quite more empty than others. By this we mean
-half-empty. Such pools are considered in priority for *demotion* into
-a young pool. (These pool contain major roots, but it is harmless to
-scan them during minor collection.) If no such pool is available for
-recycling into a young pool, we prefer to allocate a new pool.
-
-This heuristic of choosing pools at least half-empty guarantees that
-more than half of the scanning effort during minor collection is
-devoted to slots containing young values, or available for the
-allocation of young values (disregarding some optimisation in
-`boxroot_modify`). This amounts to trading efficiency guarantees of
-scanning against a slightly sub-optimal overall occupancy.
+The rings are managed in such a manner that pools that are less than
+half-full are rotated to the start of the ring. This ensures that it
+is easy to find a pool for allocation. When the current pool is full,
+if no young pool is available, then we demote the first old pool into
+a young pool, if it is less than half-full. (This pool contains major
+roots, but it is harmless to scan them during minor collection.)
+Otherwise we prefer to allocate a new pool.
 
 Care is taken so that programs that do not allocate any root do not
 pay any of the cost.

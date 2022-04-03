@@ -53,6 +53,7 @@ run-synthetic: all
 	$(call run_bench,"synthetic", \
 	    N=8 \
 	    SMALL_ROOTS=10_000 \
+	    YOUNG_RATIO=1 \
 	    LARGE_ROOTS=20 \
 	    SMALL_ROOT_PROMOTION_RATE=0.2 \
 	    LARGE_ROOT_PROMOTION_RATE=1 \

@@ -1,10 +1,17 @@
 #ifndef BOXROOT_PLATFORM_H
 #define BOXROOT_PLATFORM_H
 
+#if defined(__GNUC__)
+#define LIKELY(a) __builtin_expect(!!(a),1)
+#define UNLIKELY(a) __builtin_expect(!!(a),0)
+#else
+#define LIKELY(a) (a)
+#define UNLIKELY(a) (a)
+#endif
+
 #ifdef CAML_INTERNALS
 
 #include <assert.h>
-#include <limits.h>
 #include <stddef.h>
 
 /* Check integrity of pool structure after each scan, and print
@@ -20,14 +27,6 @@
 #else
 #define DEBUGassert(x) ((void)0)
 #endif
-#endif
-
-#if defined(__GNUC__)
-#define LIKELY(a) __builtin_expect(!!(a),1)
-#define UNLIKELY(a) __builtin_expect(!!(a),0)
-#else
-#define LIKELY(a) (a)
-#define UNLIKELY(a) (a)
 #endif
 
 typedef struct pool pool;
