@@ -18,15 +18,27 @@
 #if OCAML_MULTICORE
 
 #include <stdatomic.h>
-
+#include <caml/config.h>
 #define CALL_GC_ACTION(action, data, v, p) action(data, v, p)
+#define Add_to_ref_table(dom_st, p)                   \
+  Ref_table_add(&dom_st->minor_tables->major_ref, p);
+
+#define BOXROOT_USE_MUTEX 1
 
 #else
 
+#define Max_domains 1
 #define CALL_GC_ACTION(action, data, v, p) do {       \
     action(v, p);                                     \
     (void)data;                                       \
   } while (0)
+#define Add_to_ref_table(dom_st, p) add_to_ref_table(dom_st->ref_table, p)
+
+#if defined(ENABLE_BOXROOT_MUTEX) && (ENABLE_BOXROOT_MUTEX == 1)
+#define BOXROOT_USE_MUTEX 1
+#else
+#define BOXROOT_USE_MUTEX 0
+#endif // ENABLE_BOXROOT_MUTEX
 
 #endif // OCAML_MULTICORE
 
@@ -36,17 +48,6 @@ typedef void (*boxroot_scanning_callback) (scanning_action action,
 void boxroot_setup_hooks(boxroot_scanning_callback f);
 
 int boxroot_in_minor_collection();
-
-#if OCAML_MULTICORE
-
-#define Add_to_ref_table(dom_st, p)                   \
-  Ref_table_add(&dom_st->minor_tables->major_ref, p);
-
-#else
-
-#define Add_to_ref_table(dom_st, p) add_to_ref_table(dom_st->ref_table, p)
-
-#endif // OCAML_MULTICORE
 
 #endif // CAML_INTERNALS
 

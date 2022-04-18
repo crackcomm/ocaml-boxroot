@@ -4,7 +4,7 @@
 
 #include <assert.h>
 #include <limits.h>
-#if defined(ENABLE_BOXROOT_MUTEX) && (ENABLE_BOXROOT_MUTEX == 1)
+#if BOXROOT_USE_MUTEX
 #include <pthread.h>
 #endif
 #include <stdarg.h>
@@ -112,7 +112,7 @@ static const class global_ring_classes[] =
     }                                                                   \
   } while (0)
 
-#if defined(ENABLE_BOXROOT_MUTEX) && (ENABLE_BOXROOT_MUTEX == 1)
+#if BOXROOT_USE_MUTEX
 static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 #define CRITICAL_SECTION_BEGIN() pthread_mutex_lock(&mutex)
 #define CRITICAL_SECTION_END() pthread_mutex_unlock(&mutex)
@@ -699,9 +699,10 @@ void boxroot_print_stats()
   printf("POOL_LOG_SIZE: %d (%'d KiB, %'d roots/pool)\n"
          "DEBUG: %d\n"
          "OCAML_MULTICORE: %d\n"
+         "BOXROOT_USE_MUTEX: %d\n"
          "WITH_EXPECT: 1\n",
          (int)POOL_LOG_SIZE, kib_of_pools((int)1, 1), (int)POOL_ROOTS_CAPACITY,
-         (int)DEBUG, (int)OCAML_MULTICORE);
+         (int)DEBUG, (int)OCAML_MULTICORE, (int)BOXROOT_USE_MUTEX);
 
   printf("total allocated pool: %'d (%'d MiB)\n"
          "peak allocated pools: %'d (%'d MiB)\n"

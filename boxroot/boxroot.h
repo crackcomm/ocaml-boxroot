@@ -107,8 +107,7 @@ inline void boxroot_free_slot(boxroot root)
   }
 }
 
-#if (defined(ENABLE_BOXROOT_MUTEX) && (ENABLE_BOXROOT_MUTEX == 1)) || \
-  (defined(BOXROOT_DEBUG) && (BOXROOT_DEBUG == 1))
+#if BOXROOT_USE_MUTEX || (defined(BOXROOT_DEBUG) && (BOXROOT_DEBUG == 1))
 #define BOXROOT_NO_INLINE
 #endif
 
