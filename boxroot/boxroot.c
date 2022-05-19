@@ -68,7 +68,7 @@ static_assert(sizeof(pool) == POOL_SIZE, "bad pool size");
 /* {{{ Globals */
 
 /* Global pool rings. */
-static struct {
+struct pools {
   /* Pool of old values: contains only roots pointing to the major
      heap. Scanned at the start of major collection. */
   pool *old;
@@ -85,32 +85,13 @@ static struct {
      empty pools.
   */
   pool *free;
-} pools;
+};
+
+static struct pools pools;
 
 static boxroot_fl empty_fl = { (void *)&empty_fl, -1 };
 
 boxroot_fl *boxroot_current_fl = &empty_fl;
-
-static pool ** const global_rings[] =
-  { &pools.old, &pools.young, &pools.current, &pools.free, NULL };
-
-static const class global_ring_classes[] =
-  { OLD, YOUNG, YOUNG, UNTRACKED };
-
-/* Iterate on all global rings.
-   [global_ring]: a variable of type [pool**].
-   [cl]: a variable of type [class].
-   [action]: an expression that can refer to global_ring and cl.
-*/
-#define FOREACH_GLOBAL_RING(global_ring, cl, action) do {               \
-    pool ** const *b__st = &global_rings[0];                            \
-    for (pool ** const *b__i = b__st; *b__i != NULL; b__i++) {          \
-      pool **global_ring = *b__i;                                       \
-      class cl = global_ring_classes[b__i - b__st];                     \
-      action;                                                           \
-      (void)cl;                                                         \
-    }                                                                   \
-  } while (0)
 
 #if BOXROOT_USE_MUTEX
 static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -195,11 +176,6 @@ static inline void ring_push_back(pool *source, pool **target)
   DEBUGassert(source != *target);
   if (*target == NULL) {
     *target = source;
-    if (DEBUG) {
-      FOREACH_GLOBAL_RING(global, cl, {
-          assert(target != global || source->hd.class == cl);
-        });
-    }
   } else {
     DEBUGassert((*target)->hd.class == source->hd.class);
     pool *target_last = (*target)->hd.prev;
@@ -283,9 +259,10 @@ static void free_pool_ring(pool **ring)
 
 static void free_all_pools()
 {
-  FOREACH_GLOBAL_RING(global, cl, {
-    free_pool_ring(global);
-  });
+  free_pool_ring(&pools.old);
+  free_pool_ring(&pools.young);
+  free_pool_ring(&pools.current);
+  free_pool_ring(&pools.free);
 }
 
 /* }}} */
@@ -524,22 +501,28 @@ static void validate_pool(pool *pl)
   assert(alloc_count == pl->hd.free_list.alloc_count);
 }
 
+static void validate_ring(pool **ring, class cl)
+{
+  pool *start_pool = *ring;
+  if (start_pool == NULL) return;
+  pool *p = start_pool;
+  do {
+    assert(p->hd.class == cl);
+    validate_pool(p);
+    assert(p->hd.next != NULL);
+    assert(p->hd.next->hd.prev == p);
+    assert(p->hd.prev != NULL);
+    assert(p->hd.prev->hd.next == p);
+    p = p->hd.next;
+  } while (p != start_pool);
+}
+
 static void validate_all_pools()
 {
-  FOREACH_GLOBAL_RING(global, cl, {
-      pool *start_pool = *global;
-      if (start_pool == NULL) continue;
-      pool *p = start_pool;
-      do {
-        assert(p->hd.class == cl);
-        validate_pool(p);
-        assert(p->hd.next != NULL);
-        assert(p->hd.next->hd.prev == p);
-        assert(p->hd.prev != NULL);
-        assert(p->hd.prev->hd.next == p);
-        p = p->hd.next;
-      } while (p != start_pool);
-    });
+  validate_ring(&pools.old, OLD);
+  validate_ring(&pools.young, YOUNG);
+  validate_ring(&pools.current, YOUNG);
+  validate_ring(&pools.free, UNTRACKED);
 }
 
 // returns the amount of work done
@@ -602,21 +585,27 @@ static int scan_pool(scanning_action action, int only_young, void *data,
     return scan_pool_gen(action, data, pl);
 }
 
+static int scan_ring(scanning_action action, int only_young,
+                     void *data, pool **ring)
+{
+  int work = 0;
+  pool *start_pool = *ring;
+  if (start_pool == NULL) return 0;
+  pool *p = start_pool;
+  do {
+    work += scan_pool(action, only_young, data, p);
+    p = p->hd.next;
+  } while (p != start_pool);
+  return work;
+}
+
 static int scan_pools(scanning_action action, int only_young, void *data)
 {
   int work = 0;
-  FOREACH_GLOBAL_RING(global, cl, {
-      if (cl == UNTRACKED || (boxroot_in_minor_collection()
-                                 && cl == OLD))
-        continue;
-      pool *start_pool = *global;
-      if (start_pool == NULL) continue;
-      pool *p = start_pool;
-      do {
-        work += scan_pool(action, only_young, data, p);
-        p = p->hd.next;
-      } while (p != start_pool);
-    });
+  work += scan_ring(action, only_young, data, &pools.current);
+  work += scan_ring(action, only_young, data, &pools.young);
+  if (!boxroot_in_minor_collection())
+    work += scan_ring(action, only_young, data, &pools.old);
   return work;
 }
 
@@ -665,16 +654,15 @@ static int average(long long total_work, int nb_collections)
   return (total_work + (nb_collections / 2)) / nb_collections;
 }
 
+static int ring_used(pool *p)
+{
+  return (p != NULL && (p->hd.free_list.alloc_count != 0 || p->hd.next != p));
+}
+
 static int boxroot_used()
 {
-  FOREACH_GLOBAL_RING (global, cl, {
-      if (cl == UNTRACKED) continue;
-      pool *p = *global;
-      if (p != NULL && (p->hd.free_list.alloc_count != 0 || p->hd.next != p)) {
-        return 1;
-      }
-    });
-  return 0;
+  return
+    ring_used(pools.old) || ring_used(pools.young) || ring_used(pools.current);
 }
 
 void boxroot_print_stats()
@@ -810,9 +798,8 @@ int boxroot_setup()
     return 0;
   }
   // initialise globals
-  struct stats empty_stats = {0};
-  stats = empty_stats;
-  FOREACH_GLOBAL_RING(global, cl, { *global = NULL; });
+  stats = (struct stats){ 0 };
+  pools = (struct pools){ NULL };
   boxroot_setup_hooks(&scanning_callback);
   // we are done
   setup = 1;
