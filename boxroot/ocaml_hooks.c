@@ -51,13 +51,15 @@ static boxroot_scanning_callback scanning_callback = NULL;
 
 static scan_roots_hook prev_scan_roots_hook;
 
-static void boxroot_scan_hook(scanning_action action, void *data,
-                              caml_domain_state *dom_st)
+static void boxroot_scan_hook(scanning_action action,
+                              scanning_action_flags flags,
+                              void *data, caml_domain_state *dom_st)
 {
   if (prev_scan_roots_hook != NULL) {
-    (*prev_scan_roots_hook)(action, data, dom_st);
+    (*prev_scan_roots_hook)(action, flags, data, dom_st);
   }
-  (*scanning_callback)(action, data);
+  int only_young = flags & SCANNING_ONLY_YOUNG_VALUES;
+  (*scanning_callback)(action, only_young, data);
 }
 
 void boxroot_setup_hooks(boxroot_scanning_callback f)
@@ -81,7 +83,8 @@ static void boxroot_scan_hook(scanning_action action)
   if (prev_scan_roots_hook != NULL) {
     (*prev_scan_roots_hook)(action);
   }
-  (*scanning_callback)(action, NULL);
+  int only_young = action == &caml_oldify_one;
+  (*scanning_callback)(action, only_young, NULL);
 }
 
 void boxroot_setup_hooks(boxroot_scanning_callback f)

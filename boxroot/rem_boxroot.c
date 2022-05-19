@@ -732,7 +732,8 @@ void rem_boxroot_print_stats()
 
 static int setup = 0;
 
-static void scanning_callback(scanning_action action, void *data)
+static void scanning_callback(scanning_action action, int only_young,
+                              void *data)
 {
   CRITICAL_SECTION_BEGIN();
   if (!setup) {
