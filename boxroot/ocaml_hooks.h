@@ -9,6 +9,20 @@
 #define OCAML_MULTICORE 0
 #endif
 
+#if OCAML_MULTICORE
+
+/* We currently rely on OCaml 5.0 having a max number of domains; this
+   is checked for consistency. */
+#define Num_domains 128
+#define Domain_id (Caml_state->id)
+
+#else
+
+#define Num_domains 1
+#define Domain_id 0
+
+#endif // OCAML_MULTICORE
+
 #ifdef CAML_INTERNALS
 
 #include <caml/mlvalues.h>
@@ -18,16 +32,15 @@
 #if OCAML_MULTICORE
 
 #include <stdatomic.h>
-#include <caml/config.h>
+
 #define CALL_GC_ACTION(action, data, v, p) action(data, v, p)
 #define Add_to_ref_table(dom_st, p)                   \
   Ref_table_add(&dom_st->minor_tables->major_ref, p);
 
 #define BOXROOT_USE_MUTEX 1
 
-#else
+#else // if !OCAML_MULTICORE
 
-#define Max_domains 1
 #define CALL_GC_ACTION(action, data, v, p) do {       \
     action(v, p);                                     \
     (void)data;                                       \
@@ -45,9 +58,12 @@
 typedef void (*boxroot_scanning_callback) (scanning_action action,
                                            int only_young, void *data);
 
-void boxroot_setup_hooks(boxroot_scanning_callback f);
+void boxroot_setup_hooks(boxroot_scanning_callback scanning,
+                         caml_timing_hook domain_termination);
 
 int boxroot_in_minor_collection();
+
+void assert_domain_lock_held(int dom_id);
 
 #endif // CAML_INTERNALS
 

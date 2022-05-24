@@ -775,7 +775,7 @@ int rem_boxroot_setup()
   stats = empty_stats;
   pools = NULL;
   full_pools = NULL;
-  boxroot_setup_hooks(&scanning_callback);
+  boxroot_setup_hooks(&scanning_callback, NULL);
   // we are done
   setup = 1;
   CRITICAL_SECTION_END();

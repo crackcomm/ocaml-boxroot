@@ -3,7 +3,18 @@
 
 #include "ocaml_hooks.h"
 
+#include <assert.h>
+
 #include <caml/misc.h>
+
+#if OCAML_MULTICORE
+
+#include <caml/domain.h>
+static_assert(Max_domains <= Num_domains,
+              "OCaml is configured for a maximum number of domains greater than"
+              " Boxroot.");
+
+#endif
 
 #if OCAML_MULTICORE
 static atomic_int in_minor_collection = 0;
@@ -44,16 +55,17 @@ int boxroot_in_minor_collection()
   return in_minor_collection != 0;
 }
 
-
 static boxroot_scanning_callback scanning_callback = NULL;
 
 #if OCAML_MULTICORE
 
-static scan_roots_hook prev_scan_roots_hook;
+static scan_roots_hook prev_scan_roots_hook = NULL;
 
-static void boxroot_scan_hook(scanning_action action,
-                              scanning_action_flags flags,
-                              void *data, caml_domain_state *dom_st)
+static caml_timing_hook domain_terminated_callback = NULL;
+static caml_timing_hook prev_domain_terminated_hook = NULL;
+
+static void scan_hook(scanning_action action, scanning_action_flags flags,
+                      void *data, caml_domain_state *dom_st)
 {
   if (prev_scan_roots_hook != NULL) {
     (*prev_scan_roots_hook)(action, flags, data, dom_st);
@@ -62,21 +74,37 @@ static void boxroot_scan_hook(scanning_action action,
   (*scanning_callback)(action, only_young, data);
 }
 
-void boxroot_setup_hooks(boxroot_scanning_callback f)
+static void domain_terminated_hook()
 {
-  scanning_callback = f;
+  if (prev_domain_terminated_hook != NULL) {
+    (*prev_domain_terminated_hook)();
+  }
+  (*domain_terminated_callback)();
+}
+
+void boxroot_setup_hooks(boxroot_scanning_callback scanning,
+                         caml_timing_hook domain_termination)
+{
+  scanning_callback = scanning;
   // save previous hooks and install ours
   prev_scan_roots_hook = atomic_exchange(&caml_scan_roots_hook,
-                                         boxroot_scan_hook);
+                                         scan_hook);
   prev_minor_begin_hook = atomic_exchange(&caml_minor_gc_begin_hook,
                                           record_minor_begin);
   prev_minor_end_hook = atomic_exchange(&caml_minor_gc_end_hook,
                                         record_minor_end);
+#if OCAML_MULTICORE
+  domain_terminated_callback = domain_termination;
+  prev_domain_terminated_hook = atomic_exchange(&caml_domain_terminated_hook,
+                                                domain_terminated_hook);
+#else
+  (void)domain_terminated_hook;
+#endif
 }
 
 #else
 
-static void (*prev_scan_roots_hook)(scanning_action);
+static void (*prev_scan_roots_hook)(scanning_action) = NULL;
 
 static void boxroot_scan_hook(scanning_action action)
 {
@@ -87,7 +115,7 @@ static void boxroot_scan_hook(scanning_action action)
   (*scanning_callback)(action, only_young, NULL);
 }
 
-void boxroot_setup_hooks(boxroot_scanning_callback f)
+void boxroot_setup_hooks(boxroot_scanning_callback f, caml_timing_hook)
 {
   scanning_callback = f;
   // save previous hooks
@@ -101,3 +129,21 @@ void boxroot_setup_hooks(boxroot_scanning_callback f)
 }
 
 #endif // OCAML_MULTICORE
+
+#if OCAML_MULTICORE
+
+/* FIXME: this needs https://github.com/ocaml/ocaml/pull/11272 */
+void assert_domain_lock_held(int dom_id)
+{
+  caml_domain_state *dom_st = Caml_state;
+  assert(dom_st != NULL && dom_st->id == dom_id);
+}
+
+#else
+
+/* FIXME: ad hoc implementation using hooks */
+void assert_domain_lock_held(int) {}
+
+#endif // OCAML_MULTICORE
+
+

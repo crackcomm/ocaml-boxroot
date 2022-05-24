@@ -7,6 +7,7 @@
 #include <caml/minor_gc.h>
 #include <caml/address_class.h>
 #include "platform.h"
+#include "ocaml_hooks.h"
 
 typedef struct boxroot_private* boxroot;
 
@@ -46,10 +47,14 @@ void boxroot_modify(boxroot *, value);
 
 
 /* The behaviour of the above functions is well-defined only after the
-   allocator has been initialised with `boxroot_setup`, which must be
-   called after OCaml startup, and before it has released its
-   resources with `boxroot_teardown`, which can be called after OCaml
-   shutdown. */
+   allocator has been initialised with `boxroot_setup` and before it
+   has released its resources with `boxroot_teardown`.
+
+   [boxroot_setup] must be called after OCaml startup while holding
+   the domain lock, and [boxroot_teardown] can only be called after
+   OCaml shutdown. [boxroot_setup] returns 0 if boxroot has already
+   been setup or tore down, 1 otherwise.
+ */
 int boxroot_setup();
 void boxroot_teardown();
 
@@ -62,15 +67,17 @@ void boxroot_print_stats();
 typedef struct {
   void *next;
   int alloc_count;
+#if OCAML_MULTICORE
+  atomic_int domain_id;
+#endif
 } boxroot_fl;
 
-extern boxroot_fl *boxroot_current_fl;
+extern boxroot_fl *boxroot_current_fl[Num_domains + 1];
 
 boxroot boxroot_alloc_slot_slow(value);
 
-inline boxroot boxroot_alloc_slot(value init)
+inline boxroot boxroot_alloc_slot(boxroot_fl *fl, value init)
 {
-  boxroot_fl *fl = boxroot_current_fl;
   void *new_root = fl->next;
   if (UNLIKELY(new_root == fl))
     // pool full, not allocated or not initialized
@@ -87,7 +94,7 @@ inline boxroot boxroot_alloc_slot(value init)
 #define POOL_SIZE ((size_t)1 << POOL_LOG_SIZE)
 /* Move a pool towards the front of its ring for selection as current
    pool every DEALLOC_THRESHOLD deallocations. Change this with
-   benchmarks in hand. */
+   benchmarks in hand. Must be a power of 2. */
 #define DEALLOC_THRESHOLD ((int)POOL_SIZE / 2)
 
 void boxroot_try_demote_pool(boxroot_fl *p);
@@ -95,10 +102,8 @@ void boxroot_try_demote_pool(boxroot_fl *p);
 #define Get_pool_header(s)                                \
   ((void *)((uintptr_t)s & ~((uintptr_t)POOL_SIZE - 1)))
 
-inline void boxroot_free_slot(boxroot root)
+inline void boxroot_free_slot(boxroot_fl *fl, void **s)
 {
-  void **s = (void **)root;
-  boxroot_fl *fl = Get_pool_header(s);
   *s = (void *)fl->next;
   fl->next = s;
   int alloc_count = --fl->alloc_count;
@@ -113,15 +118,22 @@ inline void boxroot_free_slot(boxroot root)
 
 #ifdef BOXROOT_NO_INLINE
 
-boxroot boxroot_create_debug(value v);
-void boxroot_delete_debug(boxroot root);
-inline boxroot boxroot_create(value v) { return boxroot_create_debug(v); }
-inline void boxroot_delete(boxroot root) { boxroot_delete_debug(root); }
+boxroot boxroot_create_noinline(value v);
+void boxroot_delete_noinline(boxroot root);
+inline boxroot boxroot_create(value v) { return boxroot_create_noinline(v); }
+inline void boxroot_delete(boxroot root) { boxroot_delete_noinline(root); }
 
 #else
 
-inline boxroot boxroot_create(value v) { return boxroot_alloc_slot(v); }
-inline void boxroot_delete(boxroot root) { boxroot_free_slot(root); }
+inline boxroot boxroot_create(value v)
+{
+  return boxroot_alloc_slot(boxroot_current_fl[Domain_id], v);
+}
+
+inline void boxroot_delete(boxroot root)
+{
+  boxroot_free_slot(Get_pool_header(root), (void **)root);
+}
 
 #endif // BOXROOT_NO_INLINE
 
