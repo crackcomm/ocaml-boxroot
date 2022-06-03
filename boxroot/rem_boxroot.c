@@ -296,7 +296,7 @@ static pool * get_empty_pool(void)
   ++stats.live_pools;
   if (stats.live_pools > stats.peak_pools) stats.peak_pools = stats.live_pools;
 
-  pool *p = alloc_uninitialised_pool(POOL_SIZE);
+  pool *p = boxroot_alloc_uninitialised_pool(POOL_SIZE);
   if (p == NULL) return NULL;
   ++stats.total_alloced_pools;
 
@@ -350,7 +350,7 @@ static pool *pool_remove(pool *p)
 static void free_all_pools(void) {
   while (pools != NULL) {
     pool *p = ring_pop(&pools);
-    free_pool(p);
+    boxroot_free_pool(p);
     ++stats.total_freed_pools;
   }
 }
@@ -592,7 +592,7 @@ static void free_empty_pools(void) {
       if (keep_empty_pools > 0) {
         --keep_empty_pools;
       } else {
-        free_pool(pool_remove(p));
+        boxroot_free_pool(pool_remove(p));
         ++stats.total_freed_pools;
       }
     }

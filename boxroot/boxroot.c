@@ -26,11 +26,6 @@
 #include "ocaml_hooks.h"
 #include "platform.h"
 
-#if BOXROOT_USE_MUTEX
-#include <pthread.h>
-#include <errno.h>
-#endif
-
 /* }}} */
 
 /* {{{ Data types */
@@ -71,7 +66,7 @@ static_assert(sizeof(pool) == POOL_SIZE, "bad pool size");
 
 /* Global pool rings. */
 typedef struct {
-  pthread_mutex_t mutex;
+  mutex_t mutex;
   /* Pool of old values: contains only roots pointing to the major
      heap. Scanned at the start of major collection. */
   pool *old;
@@ -128,33 +123,25 @@ static inline void pool_set_dom_id(pool *p, int n) { (void)p; (void)n; }
 
 static pool_rings * init_pool_rings(int dom_id);
 
-#if BOXROOT_USE_MUTEX
-
-static int init_mutex(pthread_mutex_t *mutex)
-{
-  int err;
-  while (EAGAIN == (err = pthread_mutex_init(mutex, NULL))) {};
-  return err == 0;
-}
-
 /* FIXME: We assume for now that this does not fail */
 static inline void acquire_pool_rings(int dom_id)
 {
   pool_rings *local = pools[dom_id];
   if (UNLIKELY(local == NULL)) {
+    DEBUGassert(dom_id != 0 && dom_id != Orphaned_id);
     /* We have the domain lock except during deletion. In the case of
        deletion, we always have local != NULL. */
     local = init_pool_rings(dom_id);
   }
-  pthread_mutex_lock(&local->mutex);
+  boxroot_mutex_lock(&local->mutex);
 }
 
 static inline void release_pool_rings(int dom_id)
 {
-  pthread_mutex_unlock(&pools[dom_id]->mutex);
+  boxroot_mutex_unlock(&pools[dom_id]->mutex);
 }
 
-static int acquire_pool_rings_of_pool(pool *p)
+static inline int acquire_pool_rings_of_pool(pool *p)
 {
   int dom_id = dom_id_of_pool(p);
   while (1) {
@@ -167,20 +154,11 @@ static int acquire_pool_rings_of_pool(pool *p)
   }
 }
 
-#else
-
-static int init_mutex(pthread_mutex_t *) { return 1; }
-static inline void acquire_pool_rings(int) {}
-static inline void release_pool_rings(int) {}
-static inline int acquire_pool_rings_of_pool(pool *p) { return 0; }
-
-#endif // BOXROOT_USE_MUTEX
-
 static pool_rings * alloc_pool_rings()
 {
   pool_rings *ps = (pool_rings *)malloc(sizeof(pool_rings));
   if (ps == NULL) goto out_err;
-  if (!init_mutex(&ps->mutex)) goto out_err;
+  if (!boxroot_initialize_mutex(&ps->mutex)) goto out_err;
   return ps;
  out_err:
   free(ps);
@@ -313,7 +291,7 @@ static pool * ring_pop(pool **target)
 
 static pool * get_uninitialised_pool()
 {
-  pool *p = alloc_uninitialised_pool(POOL_SIZE);
+  pool *p = boxroot_alloc_uninitialised_pool(POOL_SIZE);
   if (p == NULL) return NULL;
   ++stats.total_alloced_pools;
   ring_link(p, p);
@@ -356,7 +334,7 @@ static void free_pool_ring(pool **ring)
 {
   while (*ring != NULL) {
       pool *p = ring_pop(ring);
-      free_pool(p);
+      boxroot_free_pool(p);
   }
 }
 
@@ -511,7 +489,7 @@ boxroot boxroot_alloc_slot_slow(value init)
   // minor collection by scheduling a minor collection?
   pool *p = find_available_pool(dom_id);
   if (p == NULL) return NULL;
-  assert(!is_full_pool(p));
+  DEBUGassert(!is_full_pool(p));
   return boxroot_alloc_slot(&p->hd.free_list, init);
 }
 

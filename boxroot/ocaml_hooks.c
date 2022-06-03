@@ -2,21 +2,19 @@
 #define CAML_INTERNALS
 
 #include "ocaml_hooks.h"
+#include "platform.h"
 
 #include <assert.h>
+#include <limits.h>
 
 #include <caml/misc.h>
-
+#include <caml/minor_gc.h>
 #if OCAML_MULTICORE
-
 #include <caml/domain.h>
-static_assert(Max_domains <= Num_domains,
-              "OCaml is configured for a maximum number of domains greater than"
-              " Boxroot.");
-
 #endif
 
 #if OCAML_MULTICORE
+static_assert(Num_domains < INT_MAX);
 static atomic_int in_minor_collection = 0;
 #else
 static int in_minor_collection = 0;
@@ -115,9 +113,10 @@ static void boxroot_scan_hook(scanning_action action)
   (*scanning_callback)(action, only_young, NULL);
 }
 
-void boxroot_setup_hooks(boxroot_scanning_callback f, caml_timing_hook)
+void boxroot_setup_hooks(boxroot_scanning_callback scanning,
+                         caml_timing_hook domain_termination)
 {
-  scanning_callback = f;
+  scanning_callback = scanning;
   // save previous hooks
   prev_scan_roots_hook = caml_scan_roots_hook;
   prev_minor_begin_hook = caml_minor_gc_begin_hook;
@@ -129,21 +128,4 @@ void boxroot_setup_hooks(boxroot_scanning_callback f, caml_timing_hook)
 }
 
 #endif // OCAML_MULTICORE
-
-#if OCAML_MULTICORE
-
-/* FIXME: this needs https://github.com/ocaml/ocaml/pull/11272 */
-void assert_domain_lock_held(int dom_id)
-{
-  caml_domain_state *dom_st = Caml_state;
-  assert(dom_st != NULL && dom_st->id == dom_id);
-}
-
-#else
-
-/* FIXME: ad hoc implementation using hooks */
-void assert_domain_lock_held(int) {}
-
-#endif // OCAML_MULTICORE
-
 
