@@ -360,7 +360,7 @@ void dll_boxroot_print_stats()
 
 static int setup = 0;
 
-static void scanning_callback(scanning_action action, void *data)
+static void scanning_callback(scanning_action action, int only_young, void *data)
 {
   if (!setup) return;
   int in_minor_collection = boxroot_in_minor_collection();

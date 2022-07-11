@@ -31,7 +31,7 @@ value MY(boxroot_ref_delete)(ref r)
 
 value MY(boxroot_ref_modify)(value a, value i, value v)
 {
-  ref *r = &Field(a, Long_val(i));
+  volatile value *r = &Field(a, Long_val(i));
   MY(boxroot) b = Boxroot_val(*r);
   MY(boxroot_modify)(&b, v);
   /* Replacing an immediate with an immediate */

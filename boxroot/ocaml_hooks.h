@@ -30,7 +30,8 @@
 
 #endif // OCAML_MULTICORE
 
-typedef void (*boxroot_scanning_callback) (scanning_action action, void *data);
+typedef void (*boxroot_scanning_callback) (scanning_action action,
+                                           int only_young, void *data);
 
 void boxroot_setup_hooks(boxroot_scanning_callback f);
 

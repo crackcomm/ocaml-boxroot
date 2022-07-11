@@ -567,13 +567,13 @@ static int scan_pool_gen(scanning_action action, void *data, pool *pl)
    90% faster for young_hit=10% (random)
    280% faster for young hits=0%
 */
-static int scan_pool_oldify_one(scanning_action action, void *data, pool *pl)
+static int scan_pool_young(scanning_action action, void *data, pool *pl)
 {
 #if OCAML_MULTICORE
   /* If a <= b - 2 then
      a < x && x < b  <=>  x - a - 1 <= x - b - 2 (unsigned comparison)
   */
-  uintnat young_start = (uintnat)caml_minor_heaps_base + 1;
+  uintnat young_start = (uintnat)caml_minor_heaps_start + 1;
   uintnat young_range = (uintnat)caml_minor_heaps_end - 1 - young_start;
 #else
   uintnat young_start = (uintnat)Caml_state->young_start;
@@ -587,29 +587,22 @@ static int scan_pool_oldify_one(scanning_action action, void *data, pool *pl)
     // If v falls within the young range it is likely that it is a block
     if ((uintnat)v - young_start <= young_range && Is_block(v)) {
       ++stats.young_hit;
-#if OCAML_MULTICORE
       CALL_GC_ACTION(action, data, v, (value *)i);
-#else
-      CALL_GC_ACTION(caml_oldify_one, data, v, (value *)i);
-#endif
     }
   }
   return POOL_ROOTS_CAPACITY;
 }
 
-static int scan_pool(scanning_action action, void *data, pool *pl)
+static int scan_pool(scanning_action action, int only_young, void *data,
+                     pool *pl)
 {
-#if OCAML_MULTICORE
-  if (boxroot_in_minor_collection())
-#else
-  if (action == &caml_oldify_one)
-#endif
-    return scan_pool_oldify_one(action, data, pl);
+  if (only_young)
+    return scan_pool_young(action, data, pl);
   else
     return scan_pool_gen(action, data, pl);
 }
 
-static int scan_pools(scanning_action action, void *data)
+static int scan_pools(scanning_action action, int only_young, void *data)
 {
   int work = 0;
   FOREACH_GLOBAL_RING(global, cl, {
@@ -620,17 +613,17 @@ static int scan_pools(scanning_action action, void *data)
       if (start_pool == NULL) continue;
       pool *p = start_pool;
       do {
-        work += scan_pool(action, data, p);
+        work += scan_pool(action, only_young, data, p);
         p = p->hd.next;
       } while (p != start_pool);
     });
   return work;
 }
 
-static void scan_roots(scanning_action action, void *data)
+static void scan_roots(scanning_action action, int only_young, void *data)
 {
   if (DEBUG) validate_all_pools();
-  int work = scan_pools(action, data);
+  int work = scan_pools(action, only_young, data);
   if (boxroot_in_minor_collection()) {
     promote_young_pools();
     stats.total_scanning_work_minor += work;
@@ -779,7 +772,8 @@ void boxroot_print_stats()
 
 static int setup = 0;
 
-static void scanning_callback(scanning_action action, void *data)
+static void scanning_callback(scanning_action action, int only_young,
+                              void *data)
 {
   CRITICAL_SECTION_BEGIN();
   if (!setup) {
@@ -796,7 +790,7 @@ static void scanning_callback(scanning_action action, void *data)
   // calling scan_roots if it has only just been initialised.
   if (boxroot_used()) {
     int64_t start = time_counter();
-    scan_roots(action, data);
+    scan_roots(action, only_young, data);
     int64_t duration = time_counter() - start;
     int64_t *total = in_minor_collection ? &stats.total_minor_time : &stats.total_major_time;
     int64_t *peak = in_minor_collection ? &stats.peak_minor_time : &stats.peak_major_time;
