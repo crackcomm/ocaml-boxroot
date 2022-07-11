@@ -12,9 +12,11 @@ setup:
   stage: .pre
   script:
     - sudo apk update
-    - sudo apk add --no-cache build-base opam rust cargo ca-certificates
+    - sudo apk add --no-cache build-base rust cargo ca-certificates
+      # opam version: 2.0.10
+    - opam repository add beta git+https://github.com/ocaml/ocaml-beta-repository.git
     - opam update
-    - opam switch --yes create 5.1.0+trunk
+    - opam switch create --yes 5.1.0+trunk --repos beta,default
     - opam install --switch=4.14 --yes dune
     - opam install --switch=5.1.0+trunk --yes dune
 
