@@ -25,7 +25,7 @@ build:
       - bench-log-5.1.txt
   before_script:
     - export OPAMCLI=2.0
-    - opam install --yes dune
+    - opam install --switch=4.14 --yes dune
   script:
     - echo "Testing Boxroot with OCaml 4.14"
     - ocamlc --version
@@ -50,7 +50,7 @@ build-crate:
     - echo "Testing Rust crate with OCaml 4.14"
     - ocamlc --version
     - make test-rs
-    - cd rust/ocaml-boxroot-sys && cargo clean
+    - cd rust/ocaml-boxroot-sys && cargo clean && cd ../..
     - echo "Testing Rust crate with OCaml 5.1"
       # check we have OCaml 5.1.0+trunk
     - opam env --switch=.
