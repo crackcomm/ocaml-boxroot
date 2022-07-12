@@ -3,65 +3,70 @@ image: ocaml/opam:alpine-3.15-ocaml-4.14
 
 stages:
   - .pre
-  - build-4
-  - build-5
-  - build-crate-4
-  - build-crate-5
+  - build
 
-setup:
+setup-5.1:
   stage: .pre
+  artifacts:
+    paths:
+        # Note: once the stable 5.0 is released, this can be converted into a cached dir
+      - _opam
   script:
-    - sudo apk update
-    - sudo apk add --no-cache build-base rust cargo ca-certificates
-      # opam version: 2.0.10
     - opam repository add beta git+https://github.com/ocaml/ocaml-beta-repository.git
-    - opam update
-    - opam switch create --yes 5.1.0+trunk --repos beta,default
-    - opam install --switch=4.14 --yes dune
-    - opam install --switch=5.1.0+trunk --yes dune
+    - opam switch create . --packages=ocaml-variants.5.1.0+trunk,dune --repos beta,default --yes
 
-build-4:
-  stage: build-4
+build-4.14:
+  stage: build
+  dependencies: []
   artifacts:
     paths:
       - bench-log.txt
   before_script:
-    - opam switch 4.14
-    - eval $(opam env)
+    - opam install --yes dune
   script:
+    - ocamlc --version
     - make all
     - make run | tee bench-log.txt
 
-build-5:
-  stage: build-5
+build-5.1:
+  stage: build
+  dependencies:
+    - setup-5.1
   artifacts:
     paths:
       - bench-log.txt
-  before_script:
-    - opam switch 5.1.0+trunk
-    - eval $(opam env)
   script:
+      # check we have OCaml 5.1.0+trunk
+    - opam env --switch=.
+      # switch to OCaml 5.1.0+trunk
+    - eval $(opam env --switch=. --set-switch)
+    - ocamlc --version
     - make all
     - make run | tee bench-log.txt
 
-build-crate-4:
-  stage: build-crate-4
+build-crate-4.14:
+  stage: build
+  dependencies: []
   before_script:
-    - opam switch 4.14
-    - eval $(opam env)
+    - sudo apk add --no-cache rust cargo ca-certificates
   script:
+    - ocamlc --version
     - cd rust/ocaml-boxroot-sys
-    - cargo clean
     - cargo build --features "link-ocaml-runtime-and-dummy-program" --verbose
     - cargo test --features "link-ocaml-runtime-and-dummy-program" --verbose
 
-build-crate-5:
-  stage: build-crate-5
+build-crate-5.1:
+  stage: build
+  dependencies:
+    - setup-5.1
   before_script:
-    - opam switch 5.1.0+trunk
-    - eval $(opam env)
+    - sudo apk add --no-cache rust cargo ca-certificates
   script:
+      # check we have OCaml 5.1.0+trunk
+    - opam env --switch=.
+      # switch to OCaml 5.1.0+trunk
+    - eval $(opam env --switch=. --set-switch)
+    - ocamlc --version
     - cd rust/ocaml-boxroot-sys
-    - cargo clean
     - cargo build --features "link-ocaml-runtime-and-dummy-program" --verbose
     - cargo test --features "link-ocaml-runtime-and-dummy-program" --verbose
