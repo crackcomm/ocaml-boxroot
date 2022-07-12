@@ -106,5 +106,10 @@ test-rs:
 	cargo build --features "link-ocaml-runtime-and-dummy-program" --verbose && \
 	cargo test --features "link-ocaml-runtime-and-dummy-program" --verbose
 
+.PHONY: clean-rs
+clean-rs:
+	cd rust/ocaml-boxroot-sys && \
+	cargo clean
+
 .PHONY: test
 test: test-boxroot test-rs

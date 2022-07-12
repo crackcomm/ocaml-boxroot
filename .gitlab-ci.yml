@@ -50,7 +50,7 @@ build-crate:
     - echo "Testing Rust crate with OCaml 4.14"
     - ocamlc --version
     - make test-rs
-    - cd rust/ocaml-boxroot-sys && cargo clean && cd ../..
+    - make clean-rs
     - echo "Testing Rust crate with OCaml 5.1"
       # check we have OCaml 5.1.0+trunk
     - opam env --switch=.
