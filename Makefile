@@ -8,12 +8,13 @@ entry:
 	@echo "make run-synthetic: run the 'synthetic' benchmark"
 	@echo "make run-globroots: run the 'globroots' benchmark"
 	@echo "make run-local_roots: run the 'local_roots' benchmark"
-	@echo "make test-boxroot: test boxroots on 'perm_count'"
+	@echo "make test: test boxroots on 'perm_count' and test ocaml-boxroot-sys"
 	@echo "make clean"
 	@echo
 	@echo "Note: for each benchmark-running target you can set TEST_MORE=1"
 	@echo "to enable some less-important benchmarks that are disabled by default"
 	@echo "  make run-globroots TEST_MORE=1"
+	@echo "other options: ENABLE_BOXROOT_MUTEX=1 BOXROOT_DEBUG=1"
 
 .PHONY: all
 all:
@@ -98,3 +99,12 @@ run-more:
 .PHONY: test-boxroot
 test-boxroot: all
 	N=10 REF=boxroot CHOICE=ephemeral dune exec benchmarks/perm_count.exe
+
+.PHONY: test-rs
+test-rs:
+	cd rust/ocaml-boxroot-sys && \
+	cargo build --features "link-ocaml-runtime-and-dummy-program" --verbose && \
+	cargo test --features "link-ocaml-runtime-and-dummy-program" --verbose
+
+.PHONY: test
+test: test-boxroot test-rs

@@ -45,10 +45,9 @@ fn link_runtime(
             .as_ref(),
     )
     .unwrap()
-    .trim()
     .to_owned()
-    .split(' ')
-    .map(|s| s.replace("-l", ""))
+    .split_whitespace()
+    .map(|s| { assert!(&s[0..2] == "-l"); String::from(&s[2..]) })
     .collect();
 
     for lib in cc_libs {
