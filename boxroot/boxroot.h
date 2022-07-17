@@ -7,7 +7,6 @@
 #include <caml/minor_gc.h>
 #include <caml/address_class.h>
 #include "platform.h"
-#include "ocaml_hooks.h"
 
 typedef struct boxroot_private* boxroot;
 
@@ -15,7 +14,8 @@ typedef struct boxroot_private* boxroot;
    value `v`. This value will be considered as a root by the OCaml GC
    as long as the boxroot lives or until it is modified. A return
    value of `NULL` indicates a failure of allocation of the backing
-   store. */
+   store. The OCaml domain lock must be held before calling
+   `boxroot_create`. */
 inline boxroot boxroot_create(value);
 
 /* `boxroot_get(r)` returns the contained value, subject to the usual
@@ -23,13 +23,17 @@ inline boxroot boxroot_create(value);
    pointer to a memory cell containing the value kept alive by `r`,
    that gets updated whenever its block is moved by the OCaml GC. The
    pointer becomes invalid after any call to `boxroot_delete(r)` or
-   `boxroot_modify(&r,v)`. The argument must be non-null. */
+   `boxroot_modify(&r,v)`. The argument must be non-null.
+
+   The OCaml domain lock must be held before calling `boxroot_get*`.
+*/
 inline value boxroot_get(boxroot r) { return *(value *)r; }
 inline value const * boxroot_get_ref(boxroot r) { return (value *)r; }
 
 /* `boxroot_delete(r)` deallocates the boxroot `r`. The value is no
    longer considered as a root by the OCaml GC. The argument must be
-   non-null. */
+   non-null. (One does not need to hold the OCaml domain lock before
+   calling `boxroot_delete`.)*/
 inline void boxroot_delete(boxroot);
 
 /* `boxroot_modify(&r,v)` changes the value kept alive by the boxroot
@@ -42,7 +46,10 @@ inline void boxroot_delete(boxroot);
    `boxroot_create`, `boxroot_modify` never fails, so `r` is
    guaranteed to be non-NULL afterwards. In addition, `boxroot_modify`
    is more efficient. Indeed, the reallocation, if needed, occurs at
-   most once between two minor collections. */
+   most once between two minor collections.
+
+   The OCaml domain lock must be held before calling `boxroot_modify`.
+*/
 void boxroot_modify(boxroot *, value);
 
 
@@ -92,9 +99,10 @@ inline boxroot boxroot_alloc_slot(boxroot_fl *fl, value init)
    Recommended: 14. */
 #define POOL_LOG_SIZE 14
 #define POOL_SIZE ((size_t)1 << POOL_LOG_SIZE)
-/* Move a pool towards the front of its ring for selection as current
-   pool every DEALLOC_THRESHOLD deallocations. Change this with
-   benchmarks in hand. Must be a power of 2. */
+/* Every DEALLOC_THRESHOLD deallocations, make a pool available for
+   allocation or demotion into a young pool, or reclassify it as an
+   empty pool if empty. Change this with benchmarks in hand. Must be a
+   power of 2. */
 #define DEALLOC_THRESHOLD ((int)POOL_SIZE / 2)
 
 void boxroot_try_demote_pool(boxroot_fl *p);

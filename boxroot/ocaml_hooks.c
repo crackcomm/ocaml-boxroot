@@ -91,13 +91,9 @@ void boxroot_setup_hooks(boxroot_scanning_callback scanning,
                                           record_minor_begin);
   prev_minor_end_hook = atomic_exchange(&caml_minor_gc_end_hook,
                                         record_minor_end);
-#if OCAML_MULTICORE
   domain_terminated_callback = domain_termination;
   prev_domain_terminated_hook = atomic_exchange(&caml_domain_terminated_hook,
                                                 domain_terminated_hook);
-#else
-  (void)domain_terminated_hook;
-#endif
 }
 
 #else
@@ -125,6 +121,7 @@ void boxroot_setup_hooks(boxroot_scanning_callback scanning,
   caml_scan_roots_hook = boxroot_scan_hook;
   caml_minor_gc_begin_hook = record_minor_begin;
   caml_minor_gc_end_hook = record_minor_end;
+  (void)domain_termination;
 }
 
 #endif // OCAML_MULTICORE

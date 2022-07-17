@@ -1,13 +1,12 @@
 #ifndef OCAML_HOOKS_H
 #define OCAML_HOOKS_H
 
-#include <caml/version.h>
-#include "platform.h"
-
 #ifdef CAML_INTERNALS
 
 #include <caml/mlvalues.h>
 #include <caml/roots.h>
+#include <caml/version.h>
+#include "platform.h"
 
 #if OCAML_MULTICORE
 
@@ -35,11 +34,13 @@ int boxroot_in_minor_collection();
 
 #if OCAML_MULTICORE
 
-/* FIXME: this needs https://github.com/ocaml/ocaml/pull/11272 */
-#define assert_domain_lock_held(dom_id) do {    \
-    caml_domain_state *dom_st = Caml_state;         \
-    assert(dom_st != NULL && dom_st->id == dom_id); \
-  } while (0)
+static inline int domain_lock_held(int dom_id)
+{
+  caml_domain_state *dom_st = Caml_state;
+  return dom_st != NULL && dom_st->id == dom_id;
+}
+
+#define assert_domain_lock_held(dom_id) (assert(domain_lock_held(dom_id)))
 
 #else
 

@@ -96,7 +96,7 @@ static boxroot_fl empty_fl =
 #endif
   };
 
-/* Domain 0 can be allocated to without a mutex with OCaml 4; make
+/* Domain 0 can be allocated-to without a mutex with OCaml 4; make
    sure to have a clean error if boxroot is not setup. */
 boxroot_fl *boxroot_current_fl[Num_domains + 1] = { &empty_fl /*, NULL... */ };
 
@@ -123,14 +123,17 @@ static inline void pool_set_dom_id(pool *p, int n) { (void)p; (void)n; }
 
 static pool_rings * init_pool_rings(int dom_id);
 
-/* FIXME: We assume for now that this does not fail */
+/* FIXME: We assume for now that this does not fail (but
+   init_pool_rings might fail). Pool ring init should be moved to
+   first root creation. */
 static inline void acquire_pool_rings(int dom_id)
 {
   pool_rings *local = pools[dom_id];
   if (UNLIKELY(local == NULL)) {
     DEBUGassert(dom_id != 0 && dom_id != Orphaned_id);
     /* We have the domain lock except during deletion. In the case of
-       deletion, we always have local != NULL. */
+       deletion, we always have local != NULL. So we have the domain
+       lock here. */
     local = init_pool_rings(dom_id);
   }
   boxroot_mutex_lock(&local->mutex);
@@ -149,6 +152,7 @@ static inline int acquire_pool_rings_of_pool(pool *p)
     acquire_pool_rings(dom_id);
     int new_dom_id = dom_id_of_pool(p);
     if (dom_id == new_dom_id) return dom_id;
+    /* Pool owner has changed before we could lock it. Try again. */
     release_pool_rings(dom_id);
     dom_id = new_dom_id;
   }
@@ -302,12 +306,9 @@ static pool * get_uninitialised_pool()
   return p;
 }
 
-// the empty free-list for a pool p is denoted by a pointer to the pool itself
-// (NULL could be a valid value for an element slot)
-static inline slot empty_free_list(pool *p)
-{
-  return (slot)p;
-}
+/* the empty free-list for a pool p is denoted by a pointer to the
+   pool itself (NULL could be a valid value for an element slot) */
+static inline slot empty_free_list(pool *p) { return (slot)p; }
 
 static inline int is_full_pool(pool *p)
 {
@@ -383,7 +384,7 @@ static void try_demote_pool(pool *p)
     target = &remote->free;
     p->hd.class = UNTRACKED;
   } else {
-    /* Move to the front */
+    /* Make available by moving to the front */
     target = source;
   }
   pool *tail = p;
@@ -400,8 +401,9 @@ void boxroot_try_demote_pool(boxroot_fl *fl)
 static inline pool * pop_available(pool **target)
 {
   /* When pools empty themselves enough, they are pushed to the front.
-     When they fill up, they are pushed to the back. If the first one
-     is full, then none of the next ones are empty enough. */
+     When they fill up, they are pushed to the back. Thus, if the
+     first one is full, then none of the next ones are empty
+     enough. */
   if (*target == NULL || is_full_pool(*target)) return NULL;
   return ring_pop(target);
 }
@@ -452,7 +454,7 @@ static void promote_young_pools(int dom_id)
     reclassify_pool(&local->current, dom_id, OLD);
     set_current_pool(dom_id, NULL);
   }
-  // A program that does not use any boxroot between two minor
+  // A domain that does not use any boxroot between two minor
   // collections should not have to pay the cost of scanning any pool.
   DEBUGassert(local->young == NULL && local->current == NULL);
 }
@@ -485,8 +487,6 @@ boxroot boxroot_alloc_slot_slow(value init)
     DEBUGassert(is_full_pool(local->current));
     reclassify_pool(&local->current, dom_id, YOUNG);
   }
-  // TODO Latency: bound the number of roots allocated between each
-  // minor collection by scheduling a minor collection?
   pool *p = find_available_pool(dom_id);
   if (p == NULL) return NULL;
   DEBUGassert(!is_full_pool(p));
@@ -685,7 +685,9 @@ static int scan_pool_gen(scanning_action action, void *data, pool *pl)
   return current - pl->roots;
 }
 
-/* Benchmark results for minor scanning:
+/* Specialised version of [scan_pool_gen] when [only_young].
+
+   Benchmark results for minor scanning:
    20% faster for young hits=95%
    20% faster for young hits=50% (random)
    90% faster for young_hit=10% (random)
@@ -702,14 +704,14 @@ static int scan_pool_young(scanning_action action, void *data, pool *pl)
 #else
   uintnat young_start = (uintnat)Caml_state->young_start;
   uintnat young_range = (uintnat)Caml_state->young_end - young_start;
-  (void)action;
 #endif
   slot *start = pl->roots;
   slot *end = start + POOL_ROOTS_CAPACITY;
   for (slot *i = start; i < end; i++) {
     value v = (value)*i;
-    // If v falls within the young range then it is likely that it is a block
-    if ((uintnat)v - young_start <= young_range && Is_block(v)) {
+    /* Optimise for branch prediction: if v falls within the young
+       range, then it is likely that it is a block */
+    if ((uintnat)v - young_start <= young_range && LIKELY(Is_block(v))) {
       ++stats.young_hit;
       CALL_GC_ACTION(action, data, v, (value *)i);
     }
@@ -952,8 +954,8 @@ int boxroot_setup()
 {
   if (status != NOT_SETUP) return 0;
   assert_domain_lock_held(Domain_id);
-  /* Domain 0 can be accessed without going through
-     acquire_pool_rings on OCaml 4. */
+  /* Domain 0 can be accessed without going through acquire_pool_rings
+     on OCaml 4 without mutex, so we need to initialize it right away. */
   init_pool_rings(0);
   init_pool_rings(Orphaned_id);
   boxroot_setup_hooks(&scanning_callback, &domain_termination_callback);

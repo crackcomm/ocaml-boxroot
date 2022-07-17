@@ -9,7 +9,7 @@
 #include <caml/domain.h>
 static_assert(Max_domains <= Num_domains,
               "OCaml is configured for a maximum number of domains greater than"
-              " Boxroot.");
+              " Boxroot's.");
 
 #endif
 
