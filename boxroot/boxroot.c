@@ -122,20 +122,9 @@ static inline void pool_set_dom_id(pool *p, int n) { (void)p; (void)n; }
 
 static pool_rings * init_pool_rings(int dom_id);
 
-/* FIXME: We assume for now that this does not fail (but
-   init_pool_rings might fail). Pool ring init should be moved to
-   first root creation. */
 static inline void acquire_pool_rings(int dom_id)
 {
-  pool_rings *local = pools[dom_id];
-  if (UNLIKELY(local == NULL)) {
-    DEBUGassert(dom_id != 0 && dom_id != Orphaned_id);
-    /* We have the domain lock except during deletion. In the case of
-       deletion, we always have local != NULL. So we have the domain
-       lock here. */
-    local = init_pool_rings(dom_id);
-  }
-  boxroot_mutex_lock(&local->mutex);
+  boxroot_mutex_lock(&pools[dom_id]->mutex);
 }
 
 static inline void release_pool_rings(int dom_id)
@@ -505,13 +494,20 @@ extern inline boxroot boxroot_alloc_slot(boxroot_fl *fl, value init);
 
 boxroot boxroot_create_noinline(value init)
 {
-  int dom_id = Domain_id;
-  acquire_pool_rings(dom_id);
   if (DEBUG) {
     if (Is_block(init) && Is_young(init)) incr(&stats.total_create_young);
     else incr(&stats.total_create_old);
   }
-  boxroot br = boxroot_alloc_slot(boxroot_current_fl[dom_id], init);
+  int dom_id = Domain_id;
+  /* Find current freelist. Synchronized by domain lock. */
+  boxroot_fl *fl = boxroot_current_fl[dom_id];
+  if (UNLIKELY(fl == NULL)) {
+    pool_rings *local = init_pool_rings(dom_id);
+    if (local == NULL) return NULL;
+    fl = &local->current->hd.free_list;
+  }
+  acquire_pool_rings(dom_id);
+  boxroot br = boxroot_alloc_slot(fl, init);
   release_pool_rings(dom_id);
   return br;
 }
@@ -640,8 +636,9 @@ static void validate_all_pools(int dom_id)
 
 static void orphan_pools(int dom_id)
 {
+  pool_rings *local = pools[dom_id]; /* synchronised by domain lock */
+  if (local == NULL) return;
   acquire_pool_rings(dom_id);
-  pool_rings *local = pools[dom_id];
   acquire_pool_rings(Orphaned_id);
   pool_rings *orphaned = pools[Orphaned_id];
   /* Move active pools to the orphaned pools. TODO: NUMA awareness? */
@@ -941,11 +938,12 @@ static void scanning_callback(scanning_action action, int only_young,
                               void *data)
 {
   if (status != RUNNING) return;
-  int dom_id = Domain_id;
-  acquire_pool_rings(dom_id);
   int in_minor_collection = boxroot_in_minor_collection();
   if (in_minor_collection) incr(&stats.minor_collections);
   else incr(&stats.major_collections);
+  int dom_id = Domain_id;
+  if (pools[dom_id] == NULL) return; /* synchronised by domain lock */
+  acquire_pool_rings(dom_id);
   // If no boxroot has been allocated, then scan_roots should not have
   // any noticeable cost. For experimental purposes, since this hook
   // is also used for other the statistics of other implementations,
