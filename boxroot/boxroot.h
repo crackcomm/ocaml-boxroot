@@ -121,29 +121,9 @@ inline void boxroot_free_slot(boxroot_fl *fl, void **s)
   }
 }
 
-#if BOXROOT_USE_MUTEX || (defined(BOXROOT_DEBUG) && (BOXROOT_DEBUG == 1))
-#define BOXROOT_NO_INLINE
-#endif
-
-#ifdef BOXROOT_NO_INLINE
-
 boxroot boxroot_create_noinline(value v);
 void boxroot_delete_noinline(boxroot root);
 inline boxroot boxroot_create(value v) { return boxroot_create_noinline(v); }
 inline void boxroot_delete(boxroot root) { boxroot_delete_noinline(root); }
-
-#else
-
-inline boxroot boxroot_create(value v)
-{
-  return boxroot_alloc_slot(boxroot_current_fl[Domain_id], v);
-}
-
-inline void boxroot_delete(boxroot root)
-{
-  boxroot_free_slot(Get_pool_header(root), (void **)root);
-}
-
-#endif // BOXROOT_NO_INLINE
 
 #endif // BOXROOT_H

@@ -14,7 +14,7 @@ entry:
 	@echo "Note: for each benchmark-running target you can set TEST_MORE={1,2}"
 	@echo "to enable some less-important benchmarks that are disabled by default"
 	@echo "  make run-globroots TEST_MORE=1"
-	@echo "other options: ENABLE_BOXROOT_MUTEX=1 BOXROOT_DEBUG=1"
+	@echo "other options: BOXROOT_DEBUG=1, STATS=1"
 
 .PHONY: all
 all:

@@ -841,10 +841,10 @@ void boxroot_print_stats()
   printf("POOL_LOG_SIZE: %d (%'lld KiB, %'d roots/pool)\n"
          "DEBUG: %d\n"
          "OCAML_MULTICORE: %d\n"
-         "BOXROOT_USE_MUTEX: %d\n"
+         "BOXROOT_USE_MUTEX: obsolete\n"
          "WITH_EXPECT: 1\n",
          (int)POOL_LOG_SIZE, kib_of_pools(1, 1), (int)POOL_ROOTS_CAPACITY,
-         (int)DEBUG, (int)OCAML_MULTICORE, (int)BOXROOT_USE_MUTEX);
+         (int)DEBUG, (int)OCAML_MULTICORE);
 
   printf("total allocated pools: %'lld (%'lld MiB)\n"
          "peak allocated pools: %'lld (%'lld MiB)\n"
