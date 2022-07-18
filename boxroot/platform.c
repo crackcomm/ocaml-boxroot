@@ -34,9 +34,7 @@ void boxroot_free_pool(pool *p) {
 
 int boxroot_initialize_mutex(pthread_mutex_t *mutex)
 {
-  int err;
-  while (EAGAIN == (err = pthread_mutex_init(mutex, NULL))) {};
-  return err == 0;
+  return 0 == pthread_mutex_init(mutex, NULL);
 }
 
 void boxroot_mutex_lock(pthread_mutex_t *mutex)
