@@ -7,7 +7,6 @@
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>
-#include <stdint.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -184,31 +183,33 @@ static pool_rings * init_pool_rings(int dom_id)
   return local;
 }
 
-// TODO: thread-safe
 static struct {
-  int minor_collections;
-  int major_collections;
-  intnat total_create_young;
-  intnat total_create_old;
-  intnat total_delete_young;
-  intnat total_delete_old;
-  intnat total_modify;
-  long long total_scanning_work_minor;
-  long long total_scanning_work_major;
-  int64_t total_minor_time;
-  int64_t total_major_time;
-  int64_t peak_minor_time;
-  int64_t peak_major_time;
-  int total_alloced_pools;
-  int total_freed_pools;
-  int live_pools; // number of tracked pools
-  int peak_pools; // max live pools at any time
-  int ring_operations; // Number of times hd.next is mutated
-  long long young_hit; // number of times a young value was encountered
-                       // during scanning
-  long long get_pool_header; // number of times get_pool_header was called
-  long long is_pool_member; // number of times is_pool_member was called
-  long long is_empty_free_list; // number of times is_empty_free_list was called
+  stat_t minor_collections;
+  stat_t major_collections;
+  stat_t total_create_young;
+  stat_t total_create_old;
+  stat_t total_delete_young;
+  stat_t total_delete_old;
+  stat_t total_modify;
+  stat_t total_scanning_work_minor;
+  stat_t total_scanning_work_major;
+  stat_t total_minor_time;
+  stat_t total_major_time;
+  stat_t peak_minor_time;
+  stat_t peak_major_time;
+  stat_t total_alloced_pools;
+  stat_t total_emptied_pools;
+  stat_t total_freed_pools;
+  stat_t live_pools; // number of tracked pools
+  stat_t peak_pools; // max live pools at any time
+  stat_t ring_operations; // Number of times hd.next is mutated
+  stat_t young_hit_gen; /* number of times a young value was encountered
+                           during generic scanning (not minor collection) */
+  stat_t young_hit_young; /* number of times a young value was encountered
+                             during young scanning (minor collection) */
+  stat_t get_pool_header; // number of times get_pool_header was called
+  stat_t is_pool_member; // number of times is_pool_member was called
+  stat_t is_empty_free_list; // number of times is_empty_free_list was called
 } stats;
 
 /* }}} */
@@ -218,7 +219,7 @@ static struct {
 // hot path
 static inline pool * get_pool_header(slot *s)
 {
-  if (DEBUG) ++stats.get_pool_header;
+  if (DEBUG) incr(&stats.get_pool_header);
   return Get_pool_header(s);
 }
 
@@ -227,14 +228,14 @@ static inline pool * get_pool_header(slot *s)
 // hot path
 static inline int is_pool_member(slot v, pool *p)
 {
-  if (DEBUG) ++stats.is_pool_member;
+  if (DEBUG) incr(&stats.is_pool_member);
   return (uintptr_t)p == ((uintptr_t)v & ~((uintptr_t)POOL_SIZE - 2));
 }
 
 // hot path
 static inline int is_empty_free_list(slot *v, pool *p)
 {
-  if (DEBUG) ++stats.is_empty_free_list;
+  if (DEBUG) incr(&stats.is_empty_free_list);
   return (v == (slot *)p);
 }
 
@@ -246,7 +247,7 @@ static inline void ring_link(pool *p, pool *q)
 {
   p->hd.next = q;
   q->hd.prev = p;
-  ++stats.ring_operations;
+  incr(&stats.ring_operations);
 }
 
 /* insert the ring [source] at the back of [*target]. */
@@ -297,7 +298,7 @@ static pool * get_uninitialised_pool()
 {
   pool *p = boxroot_alloc_uninitialised_pool(POOL_SIZE);
   if (p == NULL) return NULL;
-  ++stats.total_alloced_pools;
+  incr(&stats.total_alloced_pools);
   ring_link(p, p);
   p->hd.free_list.next = NULL;
   p->hd.free_list.alloc_count = 0;
@@ -317,8 +318,9 @@ static inline int is_full_pool(pool *p)
 
 static pool * get_empty_pool()
 {
-  ++stats.live_pools;
-  if (stats.live_pools > stats.peak_pools) stats.peak_pools = stats.live_pools;
+  long long live_pools = incr(&stats.live_pools);
+  /* racy, but whatever */
+  if (live_pools > stats.peak_pools) stats.peak_pools = live_pools;
   pool *out = get_uninitialised_pool();
 
   if (out == NULL) return NULL;
@@ -336,6 +338,7 @@ static void free_pool_ring(pool **ring)
   while (*ring != NULL) {
       pool *p = ring_pop(ring);
       boxroot_free_pool(p);
+      incr(&stats.total_freed_pools);
   }
 }
 
@@ -383,6 +386,7 @@ static void try_demote_pool(pool *p)
     /* Move to the empty list */
     target = &remote->free;
     p->hd.class = UNTRACKED;
+    incr(&stats.total_emptied_pools);
   } else {
     /* Make available by moving to the front */
     target = source;
@@ -504,8 +508,8 @@ boxroot boxroot_create_noinline(value init)
   int dom_id = Domain_id;
   acquire_pool_rings(dom_id);
   if (DEBUG) {
-    if (Is_block(init) && Is_young(init)) ++stats.total_create_young;
-    else ++stats.total_create_old;
+    if (Is_block(init) && Is_young(init)) incr(&stats.total_create_young);
+    else incr(&stats.total_create_old);
   }
   boxroot br = boxroot_alloc_slot(boxroot_current_fl[dom_id], init);
   release_pool_rings(dom_id);
@@ -523,8 +527,8 @@ void boxroot_delete_noinline(boxroot root)
   DEBUGassert(root != NULL);
   if (DEBUG) {
     value v = boxroot_get(root);
-    if (Is_block(v) && Is_young(v)) ++stats.total_delete_young;
-    else ++stats.total_delete_old;
+    if (Is_block(v) && Is_young(v)) incr(&stats.total_delete_young);
+    else incr(&stats.total_delete_old);
   }
   boxroot_free_slot(&p->hd.free_list, (slot *)root);
   release_pool_rings(dom_id);
@@ -561,7 +565,7 @@ void boxroot_modify(boxroot *root, value new_value)
   pool *p = get_pool_header(s);
   int dom_id = acquire_pool_rings_of_pool(p);
   DEBUGassert(s);
-  if (DEBUG) ++stats.total_modify;
+  if (DEBUG) incr(&stats.total_modify);
   if (LIKELY(p->hd.class == YOUNG
              || !Is_block(new_value)
              || !Is_young(new_value))) {
@@ -667,18 +671,20 @@ static void adopt_orphaned_pools(int dom_id)
 static int scan_pool_gen(scanning_action action, void *data, pool *pl)
 {
   int allocs_to_find = pl->hd.free_list.alloc_count;
+  int young_hit = 0;
   slot *current = pl->roots;
   while (allocs_to_find) {
     // hot path
     slot s = *current;
-    if (LIKELY((!is_pool_member(s, pl)))) {
+    if (!is_pool_member(s, pl)) {
       --allocs_to_find;
       value v = (value)s;
-      if (DEBUG && Is_block(v) && Is_young(v)) ++stats.young_hit;
+      if (DEBUG && Is_block(v) && Is_young(v)) ++young_hit;
       CALL_GC_ACTION(action, data, v, (value *)current);
     }
     ++current;
   }
+  stats.young_hit_gen += young_hit;
   return current - pl->roots;
 }
 
@@ -704,16 +710,20 @@ static int scan_pool_young(scanning_action action, void *data, pool *pl)
 #endif
   slot *start = pl->roots;
   slot *end = start + POOL_ROOTS_CAPACITY;
-  for (slot *i = start; i < end; i++) {
-    value v = (value)*i;
+  int young_hit = 0;
+  slot *i;
+  for (i = start; i < end; i++) {
+    slot s = *i;
+    value v = (value)s;
     /* Optimise for branch prediction: if v falls within the young
        range, then it is likely that it is a block */
     if ((uintnat)v - young_start <= young_range && LIKELY(Is_block(v))) {
-      ++stats.young_hit;
+      ++young_hit;
       CALL_GC_ACTION(action, data, v, (value *)i);
     }
   }
-  return POOL_ROOTS_CAPACITY;
+  stats.young_hit_young += young_hit;
+  return i - start;
 }
 
 static int scan_pool(scanning_action action, int only_young, void *data,
@@ -758,11 +768,11 @@ static void scan_roots(scanning_action action, int only_young,
   int work = scan_pools(action, only_young, data, dom_id);
   if (boxroot_in_minor_collection()) {
     promote_young_pools(dom_id);
-    stats.total_scanning_work_minor += work;
   } else {
-    stats.total_scanning_work_major += work;
     free_pool_ring(&pools[dom_id]->free);
   }
+  if (only_young) stats.total_scanning_work_minor += work;
+  else stats.total_scanning_work_major += work;
   if (DEBUG) validate_all_pools(dom_id);
 }
 
@@ -770,36 +780,34 @@ static void scan_roots(scanning_action action, int only_young,
 
 /* {{{ Statistics */
 
-static int64_t time_counter(void)
+static long long time_counter(void)
 {
 #if defined(POSIX_CLOCK)
   struct timespec t;
   clock_gettime(CLOCK_MONOTONIC, &t);
-  return (int64_t)t.tv_sec * (int64_t)1000000000 + (int64_t)t.tv_nsec;
+  return (long long)t.tv_sec * (long long)1000000000 + (long long)t.tv_nsec;
 #else
   return 0;
 #endif
 }
 
-// 1=KiB, 2=MiB
-static int kib_of_pools(int count, int unit)
+// unit: 1=KiB, 2=MiB
+static long long kib_of_pools(long long count, int unit)
 {
   int log_per_pool = POOL_LOG_SIZE - unit * 10;
   if (log_per_pool >= 0) return count << log_per_pool;
-  /* log_per_pool < 0 */
-  return count >> -log_per_pool;
+  else return count >> -log_per_pool;
 }
 
-static int average(long long total_work, int nb_collections)
+static double average(long long total, long long units)
 {
-  if (nb_collections <= 0) return -1;
   // round to nearest
-  return (total_work + (nb_collections / 2)) / nb_collections;
+  return ((double)total) / (double)units;
 }
 
 static int ring_used(pool *p)
 {
-  return (p != NULL && (p->hd.free_list.alloc_count != 0 || p->hd.next != p));
+  return p != NULL && (p->hd.free_list.alloc_count != 0 || p->hd.next != p);
 }
 
 /* TODO: thread-safe; simplify */
@@ -821,81 +829,97 @@ static int boxroot_used()
 
 void boxroot_print_stats()
 {
-  printf("minor collections: %d\n"
-         "major collections (and others): %d\n",
+  printf("minor collections: %'lld\n"
+         "major collections (and others): %'lld\n",
          stats.minor_collections,
          stats.major_collections);
 
-  int scanning_work_minor = average(stats.total_scanning_work_minor, stats.minor_collections);
-  int scanning_work_major = average(stats.total_scanning_work_major, stats.major_collections);
-  long long total_scanning_work = stats.total_scanning_work_minor + stats.total_scanning_work_major;
-  int ring_operations_per_pool = average(stats.ring_operations, stats.total_alloced_pools);
-
   if (stats.total_alloced_pools == 0) return;
 
-  int64_t time_per_minor =
-      stats.minor_collections ? stats.total_minor_time / stats.minor_collections : 0;
-  int64_t time_per_major =
-      stats.major_collections ? stats.total_major_time / stats.major_collections : 0;
-
-  printf("POOL_LOG_SIZE: %d (%'d KiB, %'d roots/pool)\n"
+  printf("POOL_LOG_SIZE: %d (%'lld KiB, %'d roots/pool)\n"
          "DEBUG: %d\n"
          "OCAML_MULTICORE: %d\n"
          "BOXROOT_USE_MUTEX: %d\n"
          "WITH_EXPECT: 1\n",
-         (int)POOL_LOG_SIZE, kib_of_pools((int)1, 1), (int)POOL_ROOTS_CAPACITY,
+         (int)POOL_LOG_SIZE, kib_of_pools(1, 1), (int)POOL_ROOTS_CAPACITY,
          (int)DEBUG, (int)OCAML_MULTICORE, (int)BOXROOT_USE_MUTEX);
 
-  printf("total allocated pool: %'d (%'d MiB)\n"
-         "peak allocated pools: %'d (%'d MiB)\n"
-         "total freed pool: %'d (%'d MiB)\n",
+  printf("total allocated pools: %'lld (%'lld MiB)\n"
+         "peak allocated pools: %'lld (%'lld MiB)\n"
+         "total emptied pools: %'lld (%'lld MiB)\n"
+         "total freed pools: %'lld (%'lld MiB)\n",
          stats.total_alloced_pools,
          kib_of_pools(stats.total_alloced_pools, 2),
          stats.peak_pools,
          kib_of_pools(stats.peak_pools, 2),
+         stats.total_emptied_pools,
+         kib_of_pools(stats.total_emptied_pools, 2),
          stats.total_freed_pools,
          kib_of_pools(stats.total_freed_pools, 2));
 
-  int young_hits_pct = stats.total_scanning_work_minor ?
-    (stats.young_hit * 100) / stats.total_scanning_work_minor
-    : -1;
+  double scanning_work_minor =
+    average(stats.total_scanning_work_minor, stats.minor_collections);
+  double scanning_work_major =
+    average(stats.total_scanning_work_major, stats.major_collections);
+  long long total_scanning_work =
+    stats.total_scanning_work_minor + stats.total_scanning_work_major;
+#if DEBUG
+  double young_hits_gen_pct =
+    average(stats.young_hit_gen * 100, stats.total_scanning_work_major);
+#endif
+  double young_hits_young_pct =
+    average(stats.young_hit_young * 100, stats.total_scanning_work_minor);
 
-  printf("work per minor: %'d\n"
-         "work per major: %'d\n"
+  printf("work per minor: %'.0f\n"
+         "work per major: %'.0f\n"
          "total scanning work: %'lld (%'lld minor, %'lld major)\n"
-         "young hits: %d%%\n",
+#if DEBUG
+         "young hits (non-minor collection): %.2f%%\n"
+#endif
+         "young hits (minor collection): %.2f%%\n",
          scanning_work_minor,
          scanning_work_major,
          total_scanning_work, stats.total_scanning_work_minor, stats.total_scanning_work_major,
-         young_hits_pct);
+#if DEBUG
+         young_hits_gen_pct,
+#endif
+         young_hits_young_pct);
 
 #if defined(POSIX_CLOCK)
-  printf("average time per minor: %'lldns\n"
-         "average time per major: %'lldns\n"
-         "peak time per minor: %'lldns\n"
-         "peak time per major: %'lldns\n",
-         (long long)time_per_minor,
-         (long long)time_per_major,
-         (long long)stats.peak_minor_time,
-         (long long)stats.peak_major_time);
+  double time_per_minor =
+    average(stats.total_minor_time, stats.minor_collections) / 1000;
+  double time_per_major =
+    average(stats.total_major_time, stats.major_collections) / 1000;
+
+  printf("average time per minor: %'.3fµs\n"
+         "average time per major: %'.3fµs\n"
+         "peak time per minor: %'.3fµs\n"
+         "peak time per major: %'.3fµs\n",
+         time_per_minor,
+         time_per_major,
+         ((double)stats.peak_minor_time) / 1000,
+         ((double)stats.peak_major_time) / 1000);
 #endif
 
-  printf("total ring operations: %'d\n"
-         "ring operations per pool: %'d\n",
+  double ring_operations_per_pool =
+    average(stats.ring_operations, stats.total_alloced_pools);
+
+  printf("total ring operations: %'lld\n"
+         "ring operations per pool: %.2f\n",
          stats.ring_operations,
          ring_operations_per_pool);
 
-#if DEBUG != 0
-  intnat total_create = stats.total_create_young + stats.total_create_old;
-  intnat total_delete = stats.total_delete_young + stats.total_delete_old;
-  intnat create_young_pct = total_create ?
-    (stats.total_create_young * 100 / total_create) : -1;
-  intnat delete_young_pct = total_delete ?
-    (stats.total_delete_young * 100 / total_delete) : -1;
+#if DEBUG
+  long long total_create = stats.total_create_young + stats.total_create_old;
+  long long total_delete = stats.total_delete_young + stats.total_delete_old;
+  double create_young_pct =
+    average(stats.total_create_young * 100, total_create);
+  double delete_young_pct =
+    average(stats.total_delete_young * 100, total_delete);
 
-  printf("total created: %'ld (%ld%% young)\n"
-         "total deleted: %'ld (%ld%% young)\n"
-         "total modified: %'ld\n",
+  printf("total created: %'lld (%.2f%% young)\n"
+         "total deleted: %'lld (%.2f%% young)\n"
+         "total modified: %'lld\n",
          total_create, create_young_pct,
          total_delete, delete_young_pct,
          stats.total_modify);
@@ -920,21 +944,21 @@ static void scanning_callback(scanning_action action, int only_young,
   int dom_id = Domain_id;
   acquire_pool_rings(dom_id);
   int in_minor_collection = boxroot_in_minor_collection();
-  if (in_minor_collection) ++stats.minor_collections;
-  else ++stats.major_collections;
+  if (in_minor_collection) incr(&stats.minor_collections);
+  else incr(&stats.major_collections);
   // If no boxroot has been allocated, then scan_roots should not have
   // any noticeable cost. For experimental purposes, since this hook
   // is also used for other the statistics of other implementations,
   // we further make sure of this with an extra test, by avoiding
   // calling scan_roots if it has only just been initialised.
   if (boxroot_used()) {
-    int64_t start = time_counter();
+    long long start = time_counter();
     scan_roots(action, only_young, data, dom_id);
-    int64_t duration = time_counter() - start;
-    int64_t *total = in_minor_collection ? &stats.total_minor_time : &stats.total_major_time;
-    int64_t *peak = in_minor_collection ? &stats.peak_minor_time : &stats.peak_major_time;
+    long long duration = time_counter() - start;
+    stat_t *total = in_minor_collection ? &stats.total_minor_time : &stats.total_major_time;
+    stat_t *peak = in_minor_collection ? &stats.peak_minor_time : &stats.peak_major_time;
     *total += duration;
-    if (duration > *peak) *peak = duration;
+    if (duration > *peak) *peak = duration; // racy, but whatever
   }
   release_pool_rings(dom_id);
 }

@@ -46,14 +46,28 @@
 
 #include <assert.h>
 #include <stddef.h>
-
-#if OCAML_MULTICORE
-#include <stdatomic.h>
-#endif
-
 #include <caml/mlvalues.h>
 #include <caml/minor_gc.h>
 #include <caml/roots.h>
+
+#if OCAML_MULTICORE
+
+#include <stdatomic.h>
+
+typedef atomic_llong stat_t;
+
+static inline long long incr(stat_t *n)
+{
+  return 1 + atomic_fetch_add_explicit(n, 1, memory_order_relaxed);
+}
+
+#else
+
+typedef long long stat_t;
+
+static inline long long incr(stat_t *n) { return ++(*n); }
+
+#endif // OCAML_MULTICORE
 
 #if BOXROOT_USE_MUTEX
 
