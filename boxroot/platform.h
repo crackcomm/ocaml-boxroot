@@ -59,10 +59,12 @@
 
 #include <pthread.h>
 typedef pthread_mutex_t mutex_t;
+#define BOXROOT_MUTEX_INITIALIZER PTHREAD_MUTEX_INITIALIZER;
 
 #else
 
 typedef int mutex_t;
+#define BOXROOT_MUTEX_INITIALIZER 0;
 
 #endif // BOXROOT_USE_MUTEX
 

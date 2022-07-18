@@ -463,9 +463,6 @@ static void promote_young_pools(int dom_id)
 
 /* {{{ Allocation, deallocation */
 
-/* Used for initialization */
-//static pthread_mutex_t global_mutex = PTHREAD_MUTEX_INITIALIZER;
-
 enum status { NOT_SETUP, RUNNING, FREED };
 
 /* Thread-safety: see documented constraints on the use of
@@ -950,8 +947,12 @@ static void domain_termination_callback()
   orphan_pools(dom_id);
 }
 
+/* Used for initialization/teardown */
+static mutex_t init_mutex = BOXROOT_MUTEX_INITIALIZER;
+
 int boxroot_setup()
 {
+  boxroot_mutex_lock(&init_mutex);
   if (status != NOT_SETUP) return 0;
   assert_domain_lock_held(Domain_id);
   /* Domain 0 can be accessed without going through acquire_pool_rings
@@ -961,11 +962,13 @@ int boxroot_setup()
   boxroot_setup_hooks(&scanning_callback, &domain_termination_callback);
   // we are done
   status = RUNNING;
+  boxroot_mutex_unlock(&init_mutex);
   return 1;
 }
 
 void boxroot_teardown()
 {
+  boxroot_mutex_lock(&init_mutex);
   if (status != RUNNING) return;
   status = FREED;
   for (int i = 0; i < Num_domains; i++) {
@@ -974,6 +977,7 @@ void boxroot_teardown()
     free_pool_rings(ps);
     free(ps);
   }
+  boxroot_mutex_unlock(&init_mutex);
 }
 
 /* }}} */
