@@ -472,6 +472,9 @@ boxroot boxroot_alloc_slot_slow(value init)
 {
   // We might be here because boxroot is not setup.
   if (status != RUNNING) return NULL;
+#if !OCAML_MULTICORE
+  boxroot_check_thread_hooks();
+#endif
   int dom_id = Domain_id;
   pool_rings *local = pools[dom_id];
   if (local->current != NULL) {
@@ -495,11 +498,12 @@ extern inline boxroot boxroot_alloc_slot(boxroot_fl *fl, value init);
 
 boxroot boxroot_create_noinline(value init)
 {
+  int dom_id = Domain_id;
   if (DEBUG) {
+    assert_domain_lock_held(dom_id);
     if (Is_block(init) && Is_young(init)) incr(&stats.total_create_young);
     else incr(&stats.total_create_old);
   }
-  int dom_id = Domain_id;
   /* Find current freelist. Synchronized by domain lock. */
   boxroot_fl *fl = boxroot_current_fl[dom_id];
   if (UNLIKELY(fl == NULL)) {
@@ -951,6 +955,9 @@ static void scanning_callback(scanning_action action, int only_young,
   // we further make sure of this with an extra test, by avoiding
   // calling scan_roots if it has only just been initialised.
   if (boxroot_used()) {
+#if !OCAML_MULTICORE
+    boxroot_check_thread_hooks();
+#endif
     long long start = time_counter();
     scan_roots(action, only_young, data, dom_id);
     long long duration = time_counter() - start;
@@ -978,11 +985,11 @@ int boxroot_setup()
   boxroot_mutex_lock(&init_mutex);
   if (status != NOT_SETUP) return 0;
   assert_domain_lock_held(Domain_id);
+  boxroot_setup_hooks(&scanning_callback, &domain_termination_callback);
   /* Domain 0 can be accessed without going through acquire_pool_rings
      on OCaml 4 without mutex, so we need to initialize it right away. */
   init_pool_rings(0);
   init_pool_rings(Orphaned_id);
-  boxroot_setup_hooks(&scanning_callback, &domain_termination_callback);
   // we are done
   status = RUNNING;
   boxroot_mutex_unlock(&init_mutex);

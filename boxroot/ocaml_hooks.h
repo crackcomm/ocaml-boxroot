@@ -6,6 +6,7 @@
 
 #include <caml/mlvalues.h>
 #include <caml/roots.h>
+#include <caml/signals.h>
 #include <caml/version.h>
 #include "platform.h"
 
@@ -45,8 +46,37 @@ static inline int domain_lock_held(int dom_id)
 
 #else
 
-/* FIXME: ad hoc implementation using hooks */
+/* 0 when the master lock is held, 1 otherwise */
+extern _Thread_local int boxroot_thread_has_lock;
+
+void boxroot_enter_blocking_section(void);
+void boxroot_leave_blocking_section(void);
+
+/* We need a way to handle concurrent mutations of
+   [caml_enter/leave_blocking_section_hook]. They are only overwritten
+   once at systhreads init (we assume that no piece of code in the
+   OCaml ecosystem is as insane as the present one). We allow
+   [boxroot_thread_has_lock] to be falsely 0, but not to be falsely 1.
+   If it is falsely 1, then it means that our
+   [caml_leave_blocking_section_hook] has been overwritten and that
+   the present thread has already seen this write.
+ */
+#define boxroot_hooks_valid()  \
+  (caml_leave_blocking_section_hook == boxroot_leave_blocking_section)
+
+static inline int domain_lock_held(int dom_id)
+{
+  DEBUGassert(dom_id == 0);
+  return boxroot_thread_has_lock && LIKELY(boxroot_hooks_valid());
+}
+
+/* Disabled because unreliable */
 #define assert_domain_lock_held(dom_id) do {} while (0)
+
+/* Used to regularly check that the hooks have not been overwritten.
+   If they have, we reinstall them. Assumes that only systhreads
+   modifies them.*/
+void boxroot_check_thread_hooks();
 
 #endif // OCAML_MULTICORE
 
