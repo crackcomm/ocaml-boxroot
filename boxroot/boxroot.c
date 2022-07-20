@@ -347,6 +347,7 @@ static void try_demote_pool(pool *p)
     target = &remote->free;
     p->class = UNTRACKED;
     incr(&stats.total_emptied_pools);
+    decr(&stats.live_pools);
   } else {
     /* Make available by moving to the front */
     target = source;

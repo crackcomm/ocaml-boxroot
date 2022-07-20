@@ -51,11 +51,17 @@ static inline long long incr(stat_t *n)
   return 1 + atomic_fetch_add_explicit(n, 1, memory_order_relaxed);
 }
 
+static inline long long decr(stat_t *n)
+{
+  return atomic_fetch_add_explicit(n, -1, memory_order_relaxed) - 1;
+}
+
 #else
 
 typedef long long stat_t;
 
 static inline long long incr(stat_t *n) { return ++(*n); }
+static inline long long decr(stat_t *n) { return --(*n); }
 
 #endif // OCAML_MULTICORE
 
