@@ -327,9 +327,9 @@ static pool * get_empty_pool()
 static void free_pool_ring(pool **ring)
 {
   while (*ring != NULL) {
-      pool *p = ring_pop(ring);
-      boxroot_free_pool(p);
-      incr(&stats.total_freed_pools);
+    pool *p = ring_pop(ring);
+    boxroot_free_pool(p);
+    incr(&stats.total_freed_pools);
   }
 }
 
@@ -458,7 +458,7 @@ static void promote_young_pools(int dom_id)
 
 /* {{{ Allocation, deallocation */
 
-enum status { NOT_SETUP, RUNNING, FREED };
+enum { NOT_SETUP, RUNNING, FREED };
 
 /* Thread-safety: see documented constraints on the use of
    boxroot_setup and boxroot_teardown. */

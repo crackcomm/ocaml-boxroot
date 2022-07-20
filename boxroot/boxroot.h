@@ -5,8 +5,6 @@
 #define CAML_NAME_SPACE
 
 #include <caml/mlvalues.h>
-#include <caml/minor_gc.h>
-#include <caml/address_class.h>
 #include "platform.h"
 
 typedef struct boxroot_private* boxroot;
