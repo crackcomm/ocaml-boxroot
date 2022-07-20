@@ -50,6 +50,7 @@ static_assert(POOL_SIZE / sizeof(slot) <= INT_MAX, "pool size too large");
 #define POOL_ROOTS_CAPACITY                                 \
   ((int)((POOL_SIZE - sizeof(struct header)) / sizeof(slot)))
 
+/* TODO: simplify: remove header */
 typedef struct pool {
   struct header hd;
   /* Occupied slots are OCaml values.
@@ -74,14 +75,14 @@ typedef struct {
      the minor heap. Scanned at the start of minor and major
      collection. */
   pool *young;
-  /* Current pool. Ring of size 1. */
+  /* Current pool. Ring of size 1. Scanned at the start of minor and
+     major collection. */
   pool *current;
   /* Pools containing no root: not scanned.
      We could free these pools immediately, but this could lead to
      stuttering behavior for workloads that regularly come back to
-     0 boxroots alive. Instead we wait for the next major slice to free
-     empty pools.
-  */
+     0 boxroots alive. Instead we wait for the next major root
+     scanning to free empty pools. */
   pool *free;
 } pool_rings;
 
@@ -766,6 +767,8 @@ static void scan_roots(scanning_action action, int only_young,
                        void *data, int dom_id)
 {
   if (DEBUG) validate_all_pools(dom_id);
+  /* The first domain arriving there will take ownership of the pools
+     of terminated domains. */
   adopt_orphaned_pools(dom_id);
   int work = scan_pools(action, only_young, data, dom_id);
   if (boxroot_in_minor_collection()) {
