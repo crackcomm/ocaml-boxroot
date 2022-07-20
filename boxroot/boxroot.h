@@ -72,7 +72,7 @@ void boxroot_print_stats();
 
 typedef struct {
   void *next;
-  int alloc_count;
+  int size;
 #if OCAML_MULTICORE
   atomic_int domain_id;
 #endif
@@ -84,12 +84,13 @@ boxroot boxroot_alloc_slot_slow(value);
 
 inline boxroot boxroot_alloc_slot(boxroot_fl *fl, value init)
 {
+  int free_count = fl->size;
   void *new_root = fl->next;
-  if (BOXROOT_UNLIKELY(new_root == fl))
-    // pool full, not allocated or not initialized
+  if (BOXROOT_UNLIKELY(free_count == 0))
+    // pool full, not allocated, or not initialized
     return boxroot_alloc_slot_slow(init);
+  fl->size = free_count - 1;
   fl->next = *((void **)new_root);
-  fl->alloc_count++;
   *((value *)new_root) = init;
   return (boxroot)new_root;
 }
@@ -104,6 +105,9 @@ inline boxroot boxroot_alloc_slot(boxroot_fl *fl, value init)
    power of 2. */
 #define DEALLOC_THRESHOLD ((int)POOL_SIZE / 2)
 
+#define POOL_HD_SIZE 5 /* implementation-specific */
+#define POOL_CAPACITY ((int)(POOL_SIZE / sizeof(void *) - POOL_HD_SIZE))
+
 void boxroot_try_demote_pool(boxroot_fl *p);
 
 #define Get_pool_header(s)                                \
@@ -113,7 +117,7 @@ inline void boxroot_free_slot(boxroot_fl *fl, void **s)
 {
   *s = (void *)fl->next;
   fl->next = s;
-  int alloc_count = --fl->alloc_count;
+  int alloc_count = POOL_CAPACITY - (++fl->size);
   if (BOXROOT_UNLIKELY((alloc_count & (DEALLOC_THRESHOLD - 1)) == 0)) {
     boxroot_try_demote_pool(fl);
   }

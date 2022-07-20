@@ -47,19 +47,19 @@ struct header {
 
 static_assert(POOL_SIZE / sizeof(slot) <= INT_MAX, "pool size too large");
 
-#define POOL_ROOTS_CAPACITY                                 \
-  ((int)((POOL_SIZE - sizeof(struct header)) / sizeof(slot)))
+static_assert(sizeof(slot) * POOL_CAPACITY + sizeof(struct header) <= POOL_SIZE,
+              "POOL_CAPACITY mismatch");
 
 /* TODO: simplify: remove header */
 typedef struct pool {
   struct header hd;
   /* Occupied slots are OCaml values.
      Unoccupied slots are a pointer to the next slot in the free list,
-     or to pool itself, denoting the empty free list. */
-  slot roots[POOL_ROOTS_CAPACITY];
+     or to the pool itself, denoting the empty free list. */
+  slot roots[POOL_CAPACITY];
 } pool;
 
-static_assert(sizeof(pool) == POOL_SIZE, "bad pool size");
+static_assert(sizeof(pool) <= POOL_SIZE, "bad pool size");
 
 /* }}} */
 
@@ -91,7 +91,7 @@ static pool_rings *pools[Num_domains + 1] = { NULL };
 
 static boxroot_fl empty_fl =
   { (slot)&empty_fl
-    , -1
+    , 0
 #if OCAML_MULTICORE
     , -1
 #endif
@@ -200,7 +200,6 @@ static struct {
                              during young scanning (minor collection) */
   stat_t get_pool_header; // number of times get_pool_header was called
   stat_t is_pool_member; // number of times is_pool_member was called
-  stat_t is_empty_free_list; // number of times is_empty_free_list was called
 } stats;
 
 /* }}} */
@@ -221,13 +220,6 @@ static inline int is_pool_member(slot v, pool *p)
 {
   if (DEBUG) incr(&stats.is_pool_member);
   return (uintptr_t)p == ((uintptr_t)v & ~((uintptr_t)POOL_SIZE - 2));
-}
-
-// hot path
-static inline int is_empty_free_list(slot *v, pool *p)
-{
-  if (DEBUG) incr(&stats.is_empty_free_list);
-  return (v == (slot *)p);
 }
 
 /* }}} */
@@ -291,20 +283,11 @@ static pool * get_uninitialised_pool()
   if (p == NULL) return NULL;
   incr(&stats.total_alloced_pools);
   ring_link(p, p);
-  p->hd.free_list.next = NULL;
-  p->hd.free_list.alloc_count = 0;
+  p->hd.free_list.next = p;
+  p->hd.free_list.size = 0;
   pool_set_dom_id(p, -1);
   p->hd.class = UNTRACKED;
   return p;
-}
-
-/* the empty free-list for a pool p is denoted by a pointer to the
-   pool itself (NULL could be a valid value for an element slot) */
-static inline slot empty_free_list(pool *p) { return (slot)p; }
-
-static inline int is_full_pool(pool *p)
-{
-  return is_empty_free_list(p->hd.free_list.next, p);
 }
 
 static pool * get_empty_pool()
@@ -316,11 +299,12 @@ static pool * get_empty_pool()
 
   if (out == NULL) return NULL;
 
-  out->roots[POOL_ROOTS_CAPACITY - 1] = empty_free_list(out);
-  for (slot *s = out->roots + POOL_ROOTS_CAPACITY - 2; s >= out->roots; --s) {
+  out->roots[POOL_CAPACITY - 1] = out;
+  for (slot *s = out->roots + POOL_CAPACITY - 2; s >= out->roots; --s) {
     *s = (slot)(s + 1);
   }
   out->hd.free_list.next = out->roots;
+  out->hd.free_list.size = POOL_CAPACITY;
   return out;
 }
 
@@ -345,9 +329,11 @@ static void free_pool_rings(pool_rings *ps)
 
 /* {{{ Pool class management */
 
+#define alloc_count(p) (POOL_CAPACITY - (p)->hd.free_list.size)
+
 static inline int is_not_too_full(pool *p)
 {
-  return p->hd.free_list.alloc_count <= (int)(DEALLOC_THRESHOLD / sizeof(slot));
+  return alloc_count(p) <= (int)(DEALLOC_THRESHOLD / sizeof(slot));
 }
 
 static void set_current_pool(int dom_id, pool *p)
@@ -373,7 +359,7 @@ static void try_demote_pool(pool *p)
   if (p == remote->current || !is_not_too_full(p)) return;
   pool **source = (p->hd.class == OLD) ? &remote->old : &remote->young;
   pool **target;
-  if (p->hd.free_list.alloc_count == 0) {
+  if (alloc_count(p) == 0) {
     /* Move to the empty list */
     target = &remote->free;
     p->hd.class = UNTRACKED;
@@ -399,7 +385,7 @@ static inline pool * pop_available(pool **target)
      When they fill up, they are pushed to the back. Thus, if the
      first one is full, then none of the next ones are empty
      enough. */
-  if (*target == NULL || is_full_pool(*target)) return NULL;
+  if (*target == NULL || 0 == (*target)->hd.free_list.size) return NULL;
   return ring_pop(target);
 }
 
@@ -479,12 +465,12 @@ boxroot boxroot_alloc_slot_slow(value init)
   int dom_id = Domain_id;
   pool_rings *local = pools[dom_id];
   if (local->current != NULL) {
-    DEBUGassert(is_full_pool(local->current));
+    DEBUGassert(0 == local->current->hd.free_list.size);
     reclassify_pool(&local->current, dom_id, YOUNG);
   }
   pool *p = find_available_pool(dom_id);
   if (p == NULL) return NULL;
-  DEBUGassert(!is_full_pool(p));
+  DEBUGassert(0 != p->hd.free_list.size);
   return boxroot_alloc_slot(&p->hd.free_list, init);
 }
 
@@ -592,26 +578,25 @@ static void validate_pool(pool *pl)
     return;
   }
   // check freelist structure and length
+  int free_count = pl->hd.free_list.size;
   slot *curr = pl->hd.free_list.next;
-  int pos = 0;
-  for (; !is_empty_free_list(curr, pl); curr = (slot*)*curr, pos++)
-  {
-    assert(pos < POOL_ROOTS_CAPACITY);
-    assert(curr >= pl->roots && curr < pl->roots + POOL_ROOTS_CAPACITY);
+  while (free_count--) {
+    assert(curr >= pl->roots && curr < pl->roots + POOL_CAPACITY);
+    curr = (slot*)*curr;
   }
-  assert(pos == POOL_ROOTS_CAPACITY - pl->hd.free_list.alloc_count);
+  assert(curr == (void *)pl);
   // check count of allocated elements
-  int alloc_count = 0;
-  for(int i = 0; i < POOL_ROOTS_CAPACITY; i++) {
+  int count = 0;
+  for(int i = 0; i < POOL_CAPACITY; i++) {
     slot s = pl->roots[i];
     --stats.is_pool_member;
     if (!is_pool_member(s, pl)) {
       value v = (value)s;
       if (pl->hd.class != YOUNG && Is_block(v)) assert(!Is_young(v));
-      ++alloc_count;
+      ++count;
     }
   }
-  assert(alloc_count == pl->hd.free_list.alloc_count);
+  assert(count == alloc_count(pl));
 }
 
 static void validate_ring(pool **ring, int dom_id, class cl)
@@ -673,7 +658,7 @@ static void adopt_orphaned_pools(int dom_id)
 // returns the amount of work done
 static int scan_pool_gen(scanning_action action, void *data, pool *pl)
 {
-  int allocs_to_find = pl->hd.free_list.alloc_count;
+  int allocs_to_find = alloc_count(pl);
   int young_hit = 0;
   slot *current = pl->roots;
   while (allocs_to_find) {
@@ -712,7 +697,7 @@ static int scan_pool_young(scanning_action action, void *data, pool *pl)
   uintnat young_range = (uintnat)Caml_state->young_end - young_start;
 #endif
   slot *start = pl->roots;
-  slot *end = start + POOL_ROOTS_CAPACITY;
+  slot *end = start + POOL_CAPACITY;
   int young_hit = 0;
   slot *i;
   for (i = start; i < end; i++) {
@@ -813,7 +798,7 @@ static double average(long long total, long long units)
 
 static int ring_used(pool *p)
 {
-  return p != NULL && (p->hd.free_list.alloc_count != 0 || p->hd.next != p);
+  return p != NULL && (alloc_count(p) != 0 || p->hd.next != p);
 }
 
 /* TODO: thread-safe; simplify */
@@ -847,7 +832,7 @@ void boxroot_print_stats()
          "OCAML_MULTICORE: %d\n"
          "BOXROOT_USE_MUTEX: obsolete\n"
          "WITH_EXPECT: 1\n",
-         (int)POOL_LOG_SIZE, kib_of_pools(1, 1), (int)POOL_ROOTS_CAPACITY,
+         (int)POOL_LOG_SIZE, kib_of_pools(1, 1), (int)POOL_CAPACITY,
          (int)DEBUG, (int)OCAML_MULTICORE);
 
   printf("total allocated pools: %'lld (%'lld MiB)\n"
@@ -931,11 +916,9 @@ void boxroot_print_stats()
          stats.total_modify);
 
   printf("get_pool_header: %'lld\n"
-         "is_pool_member: %'lld\n"
-         "is_empty_free_list: %'lld\n",
+         "is_pool_member: %'lld\n",
          stats.get_pool_header,
-         stats.is_pool_member,
-         stats.is_empty_free_list);
+         stats.is_pool_member);
 #endif
 }
 
