@@ -507,7 +507,7 @@ boxroot boxroot_create_noinline(value init)
   }
   /* Find current freelist. Synchronized by domain lock. */
   boxroot_fl *fl = boxroot_current_fl[dom_id];
-  if (UNLIKELY(fl == NULL)) {
+  if (BOXROOT_UNLIKELY(fl == NULL)) {
     pool_rings *local = init_pool_rings(dom_id);
     if (local == NULL) return NULL;
     fl = &local->current->hd.free_list;
@@ -546,7 +546,7 @@ static void boxroot_reallocate(boxroot *root, value new_value, int dom_id)
   boxroot new = boxroot_alloc_slot(fl, new_value);
   pool *p = get_pool_header((slot *)*root);
   DEBUGassert(dom_id_of_pool(p) == dom_id);
-  if (LIKELY(new != NULL)) {
+  if (BOXROOT_LIKELY(new != NULL)) {
     boxroot_free_slot(&p->hd.free_list, (slot *)*root);
     *root = new;
   } else {
@@ -568,9 +568,9 @@ void boxroot_modify(boxroot *root, value new_value)
   int dom_id = acquire_pool_rings_of_pool(p);
   DEBUGassert(s);
   if (DEBUG) incr(&stats.total_modify);
-  if (LIKELY(p->hd.class == YOUNG
-             || !Is_block(new_value)
-             || !Is_young(new_value))) {
+  if (BOXROOT_LIKELY(p->hd.class == YOUNG
+                     || !Is_block(new_value)
+                     || !Is_young(new_value))) {
     *(value *)s = new_value;
   } else {
     // We need to reallocate, but this reallocation happens at most once
@@ -720,7 +720,8 @@ static int scan_pool_young(scanning_action action, void *data, pool *pl)
     value v = (value)s;
     /* Optimise for branch prediction: if v falls within the young
        range, then it is likely that it is a block */
-    if ((uintnat)v - young_start <= young_range && LIKELY(Is_block(v))) {
+    if ((uintnat)v - young_start <= young_range
+        && BOXROOT_LIKELY(Is_block(v))) {
       ++young_hit;
       CALL_GC_ACTION(action, data, v, (value *)i);
     }

@@ -85,7 +85,7 @@ boxroot boxroot_alloc_slot_slow(value);
 inline boxroot boxroot_alloc_slot(boxroot_fl *fl, value init)
 {
   void *new_root = fl->next;
-  if (UNLIKELY(new_root == fl))
+  if (BOXROOT_UNLIKELY(new_root == fl))
     // pool full, not allocated or not initialized
     return boxroot_alloc_slot_slow(init);
   fl->next = *((void **)new_root);
@@ -114,7 +114,7 @@ inline void boxroot_free_slot(boxroot_fl *fl, void **s)
   *s = (void *)fl->next;
   fl->next = s;
   int alloc_count = --fl->alloc_count;
-  if (UNLIKELY((alloc_count & (DEALLOC_THRESHOLD - 1)) == 0)) {
+  if (BOXROOT_UNLIKELY((alloc_count & (DEALLOC_THRESHOLD - 1)) == 0)) {
     boxroot_try_demote_pool(fl);
   }
 }

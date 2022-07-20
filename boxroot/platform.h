@@ -5,11 +5,11 @@
 #include <caml/version.h>
 
 #if defined(__GNUC__)
-#define LIKELY(a) __builtin_expect(!!(a),1)
-#define UNLIKELY(a) __builtin_expect(!!(a),0)
+#define BOXROOT_LIKELY(a) __builtin_expect(!!(a),1)
+#define BOXROOT_UNLIKELY(a) __builtin_expect(!!(a),0)
 #else
-#define LIKELY(a) (a)
-#define UNLIKELY(a) (a)
+#define BOXROOT_LIKELY(a) (a)
+#define BOXROOT_UNLIKELY(a) (a)
 #endif
 
 #if OCAML_VERSION >= 50000

@@ -67,7 +67,7 @@ void boxroot_leave_blocking_section(void);
 static inline int domain_lock_held(int dom_id)
 {
   DEBUGassert(dom_id == 0);
-  return boxroot_thread_has_lock && LIKELY(boxroot_hooks_valid());
+  return boxroot_thread_has_lock && BOXROOT_LIKELY(boxroot_hooks_valid());
 }
 
 /* Disabled because unreliable */
