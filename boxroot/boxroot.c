@@ -270,35 +270,25 @@ static pool * ring_pop(pool **target)
 
 /* {{{ Pool management */
 
-static pool * get_uninitialised_pool()
-{
-  pool *p = boxroot_alloc_uninitialised_pool(POOL_SIZE);
-  if (p == NULL) return NULL;
-  incr(&stats.total_alloced_pools);
-  ring_link(p, p);
-  p->free_list.next = p;
-  p->free_list.size = 0;
-  pool_set_dom_id(p, -1);
-  p->class = UNTRACKED;
-  return p;
-}
-
 static pool * get_empty_pool()
 {
   long long live_pools = incr(&stats.live_pools);
   /* racy, but whatever */
   if (live_pools > stats.peak_pools) stats.peak_pools = live_pools;
-  pool *out = get_uninitialised_pool();
-
-  if (out == NULL) return NULL;
-
-  out->roots[POOL_CAPACITY - 1] = out;
-  for (slot *s = out->roots + POOL_CAPACITY - 2; s >= out->roots; --s) {
+  pool *p = boxroot_alloc_uninitialised_pool(POOL_SIZE);
+  if (p == NULL) return NULL;
+  incr(&stats.total_alloced_pools);
+  ring_link(p, p);
+  pool_set_dom_id(p, -1);
+  p->class = UNTRACKED;
+  p->free_list.next = p->roots;
+  p->free_list.size = POOL_CAPACITY;
+  /* We end the freelist with a dummy value which satisfies is_pool_member */
+  p->roots[POOL_CAPACITY - 1] = p;
+  for (slot *s = p->roots + POOL_CAPACITY - 2; s >= p->roots; --s) {
     *s = (slot)(s + 1);
   }
-  out->free_list.next = out->roots;
-  out->free_list.size = POOL_CAPACITY;
-  return out;
+  return p;
 }
 
 static void free_pool_ring(pool **ring)
