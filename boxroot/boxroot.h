@@ -72,6 +72,9 @@ void boxroot_print_stats();
 
 typedef struct {
   void *next;
+  /* if non-empty, points to last cell */
+  void *end;
+  /* length of the list */
   int size;
 #if OCAML_MULTICORE
   atomic_int domain_id;
@@ -105,7 +108,7 @@ inline boxroot boxroot_alloc_slot(boxroot_fl *fl, value init)
    power of 2. */
 #define DEALLOC_THRESHOLD ((int)POOL_SIZE / 2)
 
-#define POOL_HD_SIZE 5 /* implementation-specific */
+#define POOL_HD_SIZE 9 /* implementation-specific */
 #define POOL_CAPACITY ((int)(POOL_SIZE / sizeof(void *) - POOL_HD_SIZE))
 
 void boxroot_try_demote_pool(boxroot_fl *p);
@@ -113,14 +116,14 @@ void boxroot_try_demote_pool(boxroot_fl *p);
 #define Get_pool_header(s)                                \
   ((void *)((uintptr_t)s & ~((uintptr_t)POOL_SIZE - 1)))
 
-inline void boxroot_free_slot(boxroot_fl *fl, void **s)
+inline int boxroot_free_slot(boxroot_fl *fl, void **s)
 {
   *s = (void *)fl->next;
   fl->next = s;
-  int alloc_count = POOL_CAPACITY - (++fl->size);
-  if (BOXROOT_UNLIKELY((alloc_count & (DEALLOC_THRESHOLD - 1)) == 0)) {
-    boxroot_try_demote_pool(fl);
-  }
+  int free_count = fl->size;
+  if (BOXROOT_UNLIKELY(free_count == 0)) fl->end = s;
+  fl->size = free_count + 1;
+  return ((POOL_CAPACITY - 1 - free_count) & (DEALLOC_THRESHOLD - 1)) == 0;
 }
 
 boxroot boxroot_create_noinline(value v);
