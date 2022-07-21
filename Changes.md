@@ -3,25 +3,31 @@ Working version
 
 ### General changes
 
-- Add support for OCaml 5.0 (Multicore).
-  (Guillaume Munch-Maccagnoni)
+- Add support for OCaml 5.0 (multicore).
+  (Guillaume Munch-Maccagnoni, review by Gabriel Scherer)
 
 ### Internal changes
 
 - Benchmark improvements.
-  (Gabriel Scherer, Guillaume Munch-Maccagnoni)
+  (Gabriel Scherer and Guillaume Munch-Maccagnoni)
+
+- Per-domain caching for OCaml multicore. There is no longer a global
+  lock for multicore.
+  (Guillaume Munch-Maccagnoni)
 
 ### Experiments
 
 - Simple implementation with a doubly-linked list
-  (Gabriel Scherer)
+  (Gabriel Scherer, review by Jacques-Henri Jourdan and
+   Guillaume Munch-Maccagnoni)
 
 - Implementation using the remembered set and a per-pool young
   freelist.
-  (Gabriel Scherer, following an idea of Stephen Dolan)
+  (Gabriel Scherer, following an idea of Stephen Dolan, review
+   by Guillaume Munch-Maccagnoni)
 
-- Impact of inlining.
-  (Guillaume Munch-Maccagnoni)
+- Optimizing for inlining.
+  (Guillaume Munch-Maccagnoni, review by Gabriel Scherer)
 
 ### Packaging
 
@@ -41,7 +47,7 @@ ocaml-boxroot 0.2
 
 - Minor simplifications and performance improvements to the allocator
   and to the benchmarks.
-  (Gabriel Scherer, Guillaume Munch-Maccagnoni)
+  (Gabriel Scherer and Guillaume Munch-Maccagnoni)
 
 ### Packaging
 
@@ -54,8 +60,8 @@ ocaml-boxroot 0.1
 =================
 
 - First numbered prototype & experimentation.
-  (Bruno Deferrari, Guillaume Munch-Maccagnoni, Gabriel Scherer,
-  Jacques-Henri Jourdan)
+  (Bruno Deferrari, Guillaume Munch-Maccagnoni, Gabriel Scherer
+   and Jacques-Henri Jourdan)
 
 ### Packaging
 

@@ -385,7 +385,7 @@ int dll_boxroot_setup()
   rings.young = NULL;
   rings.old = NULL;
   rings.free = NULL;
-  boxroot_setup_hooks(&scanning_callback);
+  boxroot_setup_hooks(&scanning_callback, NULL);
   // we are done
   setup = 1;
   if (DEBUG) validate_all_rings();
