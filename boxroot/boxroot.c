@@ -38,28 +38,21 @@ typedef enum class {
 
 typedef void * slot;
 
-struct header {
+typedef struct pool {
   boxroot_fl free_list;
   class class;
   struct pool *prev;
   struct pool *next;
-};
-
-static_assert(POOL_SIZE / sizeof(slot) <= INT_MAX, "pool size too large");
-
-static_assert(sizeof(slot) * POOL_CAPACITY + sizeof(struct header) <= POOL_SIZE,
-              "POOL_CAPACITY mismatch");
-
-/* TODO: simplify: remove header */
-typedef struct pool {
-  struct header hd;
   /* Occupied slots are OCaml values.
      Unoccupied slots are a pointer to the next slot in the free list,
      or to the pool itself, denoting the empty free list. */
-  slot roots[POOL_CAPACITY];
+  slot roots[];
 } pool;
 
-static_assert(sizeof(pool) <= POOL_SIZE, "bad pool size");
+static_assert(POOL_SIZE / sizeof(slot) <= INT_MAX, "pool size too large");
+
+static_assert(sizeof(slot) * POOL_CAPACITY + sizeof(pool) <= POOL_SIZE,
+              "POOL_CAPACITY mismatch");
 
 /* }}} */
 
@@ -105,13 +98,13 @@ boxroot_fl *boxroot_current_fl[Num_domains + 1] = { &empty_fl /*, NULL... */ };
 
 static inline int dom_id_of_pool(pool *p)
 {
-  return atomic_load_explicit(&p->hd.free_list.domain_id,
+  return atomic_load_explicit(&p->free_list.domain_id,
                               memory_order_relaxed);
 }
 
 static inline void pool_set_dom_id(pool *p, int dom_id)
 {
-  return atomic_store_explicit(&p->hd.free_list.domain_id, dom_id,
+  return atomic_store_explicit(&p->free_list.domain_id, dom_id,
                                memory_order_relaxed);
 }
 
@@ -193,7 +186,7 @@ static struct {
   stat_t total_freed_pools;
   stat_t live_pools; // number of tracked pools
   stat_t peak_pools; // max live pools at any time
-  stat_t ring_operations; // Number of times hd.next is mutated
+  stat_t ring_operations; // Number of times p->next is mutated
   stat_t young_hit_gen; /* number of times a young value was encountered
                            during generic scanning (not minor collection) */
   stat_t young_hit_young; /* number of times a young value was encountered
@@ -228,8 +221,8 @@ static inline int is_pool_member(slot v, pool *p)
 
 static inline void ring_link(pool *p, pool *q)
 {
-  p->hd.next = q;
-  q->hd.prev = p;
+  p->next = q;
+  q->prev = p;
   incr(&stats.ring_operations);
 }
 
@@ -237,14 +230,14 @@ static inline void ring_link(pool *p, pool *q)
 static inline void ring_push_back(pool *source, pool **target)
 {
   if (source == NULL) return;
-  DEBUGassert(source->hd.prev == source && source->hd.next == source);
+  DEBUGassert(source->prev == source && source->next == source);
   DEBUGassert(source != *target);
   if (*target == NULL) {
     *target = source;
   } else {
-    DEBUGassert((*target)->hd.class == source->hd.class);
-    pool *target_last = (*target)->hd.prev;
-    pool *source_last = source->hd.prev;
+    DEBUGassert((*target)->class == source->class);
+    pool *target_last = (*target)->prev;
+    pool *source_last = source->prev;
     ring_link(target_last, source);
     ring_link(source_last, *target);
   }
@@ -263,11 +256,11 @@ static pool * ring_pop(pool **target)
 {
   pool *front = *target;
   DEBUGassert(front != NULL);
-  if (front->hd.next == front) {
+  if (front->next == front) {
     *target = NULL;
   } else {
-    *target = front->hd.next;
-    ring_link(front->hd.prev, front->hd.next);
+    *target = front->next;
+    ring_link(front->prev, front->next);
   }
   ring_link(front, front);
   return front;
@@ -283,10 +276,10 @@ static pool * get_uninitialised_pool()
   if (p == NULL) return NULL;
   incr(&stats.total_alloced_pools);
   ring_link(p, p);
-  p->hd.free_list.next = p;
-  p->hd.free_list.size = 0;
+  p->free_list.next = p;
+  p->free_list.size = 0;
   pool_set_dom_id(p, -1);
-  p->hd.class = UNTRACKED;
+  p->class = UNTRACKED;
   return p;
 }
 
@@ -303,8 +296,8 @@ static pool * get_empty_pool()
   for (slot *s = out->roots + POOL_CAPACITY - 2; s >= out->roots; --s) {
     *s = (slot)(s + 1);
   }
-  out->hd.free_list.next = out->roots;
-  out->hd.free_list.size = POOL_CAPACITY;
+  out->free_list.next = out->roots;
+  out->free_list.size = POOL_CAPACITY;
   return out;
 }
 
@@ -329,7 +322,7 @@ static void free_pool_rings(pool_rings *ps)
 
 /* {{{ Pool class management */
 
-#define alloc_count(p) (POOL_CAPACITY - (p)->hd.free_list.size)
+#define alloc_count(p) (POOL_CAPACITY - (p)->free_list.size)
 
 static inline int is_not_too_full(pool *p)
 {
@@ -342,8 +335,8 @@ static void set_current_pool(int dom_id, pool *p)
   if (p != NULL) {
     pool_set_dom_id(p, dom_id);
     pools[dom_id]->current = p;
-    p->hd.class = YOUNG;
-    boxroot_current_fl[dom_id] = &p->hd.free_list;
+    p->class = YOUNG;
+    boxroot_current_fl[dom_id] = &p->free_list;
   } else {
     boxroot_current_fl[dom_id] = &empty_fl;
   }
@@ -353,16 +346,16 @@ static void set_current_pool(int dom_id, pool *p)
    ring. */
 static void try_demote_pool(pool *p)
 {
-  DEBUGassert(p->hd.class != UNTRACKED);
+  DEBUGassert(p->class != UNTRACKED);
   int dom_id = dom_id_of_pool(p);
   pool_rings *remote = pools[dom_id];
   if (p == remote->current || !is_not_too_full(p)) return;
-  pool **source = (p->hd.class == OLD) ? &remote->old : &remote->young;
+  pool **source = (p->class == OLD) ? &remote->old : &remote->young;
   pool **target;
   if (alloc_count(p) == 0) {
     /* Move to the empty list */
     target = &remote->free;
-    p->hd.class = UNTRACKED;
+    p->class = UNTRACKED;
     incr(&stats.total_emptied_pools);
   } else {
     /* Make available by moving to the front */
@@ -385,7 +378,7 @@ static inline pool * pop_available(pool **target)
      When they fill up, they are pushed to the back. Thus, if the
      first one is full, then none of the next ones are empty
      enough. */
-  if (*target == NULL || 0 == (*target)->hd.free_list.size) return NULL;
+  if (*target == NULL || 0 == (*target)->free_list.size) return NULL;
   return ring_pop(target);
 }
 
@@ -413,7 +406,7 @@ static void reclassify_pool(pool **source, int dom_id, class cl)
   pool *p = ring_pop(source);
   pool_set_dom_id(p, dom_id);
   pool **target = (cl == YOUNG) ? &local->young : &local->old;
-  p->hd.class = cl;
+  p->class = cl;
   if (is_not_too_full(p)) {
     ring_push_front(p, target);
   } else {
@@ -465,13 +458,13 @@ boxroot boxroot_alloc_slot_slow(value init)
   int dom_id = Domain_id;
   pool_rings *local = pools[dom_id];
   if (local->current != NULL) {
-    DEBUGassert(0 == local->current->hd.free_list.size);
+    DEBUGassert(0 == local->current->free_list.size);
     reclassify_pool(&local->current, dom_id, YOUNG);
   }
   pool *p = find_available_pool(dom_id);
   if (p == NULL) return NULL;
-  DEBUGassert(0 != p->hd.free_list.size);
-  return boxroot_alloc_slot(&p->hd.free_list, init);
+  DEBUGassert(0 != p->free_list.size);
+  return boxroot_alloc_slot(&p->free_list, init);
 }
 
 /* }}} */
@@ -496,7 +489,7 @@ boxroot boxroot_create_noinline(value init)
   if (BOXROOT_UNLIKELY(fl == NULL)) {
     pool_rings *local = init_pool_rings(dom_id);
     if (local == NULL) return NULL;
-    fl = &local->current->hd.free_list;
+    fl = &local->current->free_list;
   }
   acquire_pool_rings(dom_id);
   boxroot br = boxroot_alloc_slot(fl, init);
@@ -518,7 +511,7 @@ void boxroot_delete_noinline(boxroot root)
     if (Is_block(v) && Is_young(v)) incr(&stats.total_delete_young);
     else incr(&stats.total_delete_old);
   }
-  boxroot_free_slot(&p->hd.free_list, (slot *)root);
+  boxroot_free_slot(&p->free_list, (slot *)root);
   release_pool_rings(dom_id);
 }
 
@@ -533,12 +526,12 @@ static void boxroot_reallocate(boxroot *root, value new_value, int dom_id)
   pool *p = get_pool_header((slot *)*root);
   DEBUGassert(dom_id_of_pool(p) == dom_id);
   if (BOXROOT_LIKELY(new != NULL)) {
-    boxroot_free_slot(&p->hd.free_list, (slot *)*root);
+    boxroot_free_slot(&p->free_list, (slot *)*root);
     *root = new;
   } else {
     // Better not fail in boxroot_modify. Expensive but fail-safe:
     // demote its pool into the young pools.
-    DEBUGassert(p->hd.class == OLD);
+    DEBUGassert(p->class == OLD);
     pool_rings *remote = pools[dom_id];
     pool **source = (p == remote->old) ? &remote->old : &p;
     reclassify_pool(source, dom_id, YOUNG);
@@ -554,7 +547,7 @@ void boxroot_modify(boxroot *root, value new_value)
   int dom_id = acquire_pool_rings_of_pool(p);
   DEBUGassert(s);
   if (DEBUG) incr(&stats.total_modify);
-  if (BOXROOT_LIKELY(p->hd.class == YOUNG
+  if (BOXROOT_LIKELY(p->class == YOUNG
                      || !Is_block(new_value)
                      || !Is_young(new_value))) {
     *(value *)s = new_value;
@@ -572,14 +565,14 @@ void boxroot_modify(boxroot *root, value new_value)
 
 static void validate_pool(pool *pl)
 {
-  if (pl->hd.free_list.next == NULL) {
+  if (pl->free_list.next == NULL) {
     // an unintialised pool
-    assert(pl->hd.class == UNTRACKED);
+    assert(pl->class == UNTRACKED);
     return;
   }
   // check freelist structure and length
-  int free_count = pl->hd.free_list.size;
-  slot *curr = pl->hd.free_list.next;
+  int free_count = pl->free_list.size;
+  slot *curr = pl->free_list.next;
   while (free_count--) {
     assert(curr >= pl->roots && curr < pl->roots + POOL_CAPACITY);
     curr = (slot*)*curr;
@@ -592,7 +585,7 @@ static void validate_pool(pool *pl)
     --stats.is_pool_member;
     if (!is_pool_member(s, pl)) {
       value v = (value)s;
-      if (pl->hd.class != YOUNG && Is_block(v)) assert(!Is_young(v));
+      if (pl->class != YOUNG && Is_block(v)) assert(!Is_young(v));
       ++count;
     }
   }
@@ -606,13 +599,13 @@ static void validate_ring(pool **ring, int dom_id, class cl)
   pool *p = start_pool;
   do {
     assert(dom_id_of_pool(p) == dom_id);
-    assert(p->hd.class == cl);
+    assert(p->class == cl);
     validate_pool(p);
-    assert(p->hd.next != NULL);
-    assert(p->hd.next->hd.prev == p);
-    assert(p->hd.prev != NULL);
-    assert(p->hd.prev->hd.next == p);
-    p = p->hd.next;
+    assert(p->next != NULL);
+    assert(p->next->prev == p);
+    assert(p->prev != NULL);
+    assert(p->prev->next == p);
+    p = p->next;
   } while (p != start_pool);
 }
 
@@ -733,7 +726,7 @@ static int scan_ring(scanning_action action, int only_young,
   pool *p = start_pool;
   do {
     work += scan_pool(action, only_young, data, p);
-    p = p->hd.next;
+    p = p->next;
   } while (p != start_pool);
   return work;
 }
@@ -798,7 +791,7 @@ static double average(long long total, long long units)
 
 static int ring_used(pool *p)
 {
-  return p != NULL && (alloc_count(p) != 0 || p->hd.next != p);
+  return p != NULL && (alloc_count(p) != 0 || p->next != p);
 }
 
 /* TODO: thread-safe; simplify */
