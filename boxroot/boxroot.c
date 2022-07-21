@@ -243,14 +243,6 @@ static inline void ring_push_back(pool *source, pool **target)
   }
 }
 
-/* insert the ring [source] at the front of [*target]. */
-static inline void ring_push_front(pool *source, pool **target)
-{
-  if (source == NULL) return;
-  ring_push_back(source, target);
-  *target = source;
-}
-
 // remove the first element from [*target] and return it
 static pool * ring_pop(pool **target)
 {
@@ -332,6 +324,8 @@ static void set_current_pool(int dom_id, pool *p)
   }
 }
 
+static void reclassify_pool(pool **source, int dom_id, class cl);
+
 /* Move not-too-full pools to the front; move empty pools to the free
    ring. */
 static void try_demote_pool(pool *p)
@@ -340,22 +334,12 @@ static void try_demote_pool(pool *p)
   int dom_id = dom_id_of_pool(p);
   pool_rings *remote = pools[dom_id];
   if (p == remote->current || !is_not_too_full(p)) return;
-  pool **source = (p->class == OLD) ? &remote->old : &remote->young;
-  pool **target;
-  if (alloc_count(p) == 0) {
-    /* Move to the empty list */
-    target = &remote->free;
-    p->class = UNTRACKED;
-    incr(&stats.total_emptied_pools);
-    decr(&stats.live_pools);
-  } else {
-    /* Make available by moving to the front */
-    target = source;
-  }
-  pool *tail = p;
-  ring_pop(&tail);
-  if (p == *source) *source = tail;
-  ring_push_front(p, target);
+  class cl = (alloc_count(p) == 0) ? UNTRACKED : p->class;
+  /* If the pool is at the head of its ring, the new head must be
+     recorded. */
+  pool **source = (p == remote->old) ? &remote->old :
+                  (p == remote->young) ? &remote->young : &p;
+  reclassify_pool(source, dom_id, cl);
 }
 
 void boxroot_try_demote_pool(boxroot_fl *fl)
@@ -390,19 +374,30 @@ static pool * find_available_pool(int dom_id)
 
 static void validate_all_pools(int dom_id);
 
+/* move the head of [source] to the appropriate ring in domain
+   [dom_id] determined by [class]. Not-too-full pools are pushed to
+   the front. */
 static void reclassify_pool(pool **source, int dom_id, class cl)
 {
   DEBUGassert(*source != NULL);
   pool_rings *local = pools[dom_id];
   pool *p = ring_pop(source);
   pool_set_dom_id(p, dom_id);
-  pool **target = (cl == YOUNG) ? &local->young : &local->old;
-  p->class = cl;
-  if (is_not_too_full(p)) {
-    ring_push_front(p, target);
-  } else {
-    ring_push_back(p, target);
+  pool **target = NULL;
+  switch (cl) {
+  case OLD: target = &local->old; break;
+  case YOUNG: target = &local->young; break;
+  case UNTRACKED:
+    target = &local->free;
+    incr(&stats.total_emptied_pools);
+    decr(&stats.live_pools);
+    break;
   }
+  p->class = cl;
+  ring_push_back(p, target);
+  /* make p the new head of [*target] (rotate one step backwards) if
+     it is not too full. */
+  if (is_not_too_full(p)) *target = p;
 }
 
 static void promote_young_pools(int dom_id)
