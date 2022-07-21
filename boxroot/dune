@@ -4,7 +4,7 @@
  (names boxroot dll_boxroot rem_boxroot ocaml_hooks platform)
  (flags -DENABLE_BOXROOT_MUTEX=%{env:ENABLE_BOXROOT_MUTEX=0}
         -DBOXROOT_DEBUG=%{env:BOXROOT_DEBUG=0}
-        -Wall -Wshadow -Wpointer-arith -Wcast-qual -Wsign-compare
+        -Wall -Wpointer-arith -Wcast-qual -Wsign-compare
         -O2 -fno-strict-aliasing)
 )
 
