@@ -590,7 +590,7 @@ void boxroot_delete_noinline(boxroot root)
   slot *s = (slot *)root;
   pool *p = get_pool_header(s);
   int dom_id = dom_id_of_pool(p);
-  if (!domain_lock_held(dom_id)) {
+  if (!boxroot_domain_lock_held(dom_id)) {
     /* remote deallocation */
     int remote_dom_id = acquire_pool_rings_of_pool(p);
     boxroot_free_slot(&p->delayed_fl, s);
