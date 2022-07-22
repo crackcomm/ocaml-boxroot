@@ -748,6 +748,7 @@ static void adopt_orphaned_pools(int dom_id)
    requires pool lock: YES */
 static void gc_ring(pool **ring, int dom_id)
 {
+  if (!BOXROOT_MULTITHREAD) return;
   pool *p = *ring;
   *ring = NULL;
   /* TODO more efficient */
@@ -965,10 +966,10 @@ void boxroot_print_stats()
   printf("POOL_LOG_SIZE: %d (%'lld KiB, %'d roots/pool)\n"
          "DEBUG: %d\n"
          "OCAML_MULTICORE: %d\n"
-         "BOXROOT_USE_MUTEX: obsolete\n"
+         "BOXROOT_MULTITHREAD: %d\n"
          "WITH_EXPECT: 1\n",
          (int)POOL_LOG_SIZE, kib_of_pools(1, 1), (int)POOL_CAPACITY,
-         (int)DEBUG, (int)OCAML_MULTICORE);
+         (int)DEBUG, (int)OCAML_MULTICORE, (int)BOXROOT_MULTITHREAD);
 
   printf("total allocated pools: %'lld (%'lld MiB)\n"
          "peak allocated pools: %'lld (%'lld MiB)\n"

@@ -88,6 +88,10 @@ boxroot boxroot_alloc_slot_slow(value);
 
 void boxroot_create_debug(value v);
 
+/* Test the overheads of multithreading (systhreads and multicore).
+   Purely for experimental purposes. Otherwise should always be 1. */
+#define BOXROOT_MULTITHREAD 1
+
 inline boxroot boxroot_create(value init)
 {
 #if defined(BOXROOT_DEBUG) && (BOXROOT_DEBUG == 1)
@@ -95,7 +99,7 @@ inline boxroot boxroot_create(value init)
 #endif
   /* Find current freelist. Synchronized by domain lock. */
   boxroot_fl *fl = boxroot_current_fl[Domain_id];
-  if (BOXROOT_UNLIKELY(fl == NULL)) goto slow;
+  if (BOXROOT_MULTITHREAD && BOXROOT_UNLIKELY(fl == NULL)) goto slow;
   int free_count = fl->size;
   void *new_root = fl->next;
   if (BOXROOT_UNLIKELY(free_count == 0)) goto slow;
@@ -125,7 +129,7 @@ void boxroot_try_demote_pool(boxroot_fl *p);
 #define Get_pool_header(s)                                \
   ((void *)((uintptr_t)s & ~((uintptr_t)POOL_SIZE - 1)))
 
-#if OCAML_MULTICORE
+#if OCAML_MULTICORE && BOXROOT_MULTITHREAD
 #define dom_id_of_fl(fl) \
   atomic_load_explicit(&(fl)->domain_id, memory_order_relaxed);
 #else
@@ -138,7 +142,7 @@ inline int boxroot_free_slot(boxroot_fl *fl, boxroot root)
   *s = (void *)fl->next;
   fl->next = s;
   int free_count = fl->size;
-  if (BOXROOT_UNLIKELY(free_count == 0)) fl->end = s;
+  if (BOXROOT_MULTITHREAD && BOXROOT_UNLIKELY(free_count == 0)) fl->end = s;
   fl->size = free_count + 1;
   return ((POOL_CAPACITY - 1 - free_count) & (DEALLOC_THRESHOLD - 1)) == 0;
 }
@@ -153,7 +157,7 @@ inline void boxroot_delete(boxroot root)
 #endif
   boxroot_fl *fl = Get_pool_header(root);
   int dom_id = dom_id_of_fl(fl);
-  if (!boxroot_domain_lock_held(dom_id)
+  if ((BOXROOT_MULTITHREAD && !boxroot_domain_lock_held(dom_id))
       || BOXROOT_UNLIKELY(boxroot_free_slot(fl, root)))
     boxroot_delete_slow(root);
 }
