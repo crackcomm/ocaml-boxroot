@@ -10,7 +10,8 @@
 inline int boxroot_domain_lock_held(int dom_id)
 {
   caml_domain_state *dom_st = Caml_state;
-  return dom_st != NULL && dom_st->id == dom_id;
+  return BOXROOT_LIKELY(dom_st != NULL)
+    && BOXROOT_LIKELY(dom_st->id == dom_id);
 }
 
 #else
@@ -37,7 +38,8 @@ CAMLextern void (*caml_leave_blocking_section_hook)(void);
 inline int boxroot_domain_lock_held(int dom_id)
 {
   (void)dom_id;
-  return boxroot_thread_has_lock && BOXROOT_LIKELY(boxroot_hooks_valid());
+  return  BOXROOT_LIKELY(boxroot_thread_has_lock)
+    && BOXROOT_LIKELY(boxroot_hooks_valid());
 }
 
 #endif

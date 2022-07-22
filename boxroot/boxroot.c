@@ -116,16 +116,14 @@ static boxroot_fl empty_fl =
 /* Synchronisation: via domain lock */
 boxroot_fl *boxroot_current_fl[Num_domains + 1] = { &empty_fl /*, NULL... */ };
 
-#if OCAML_MULTICORE
-
 /* requires domain lock: NO
    requires pool lock: NO */
 static inline int dom_id_of_pool(pool *p)
 {
-  return atomic_load_explicit(&p->free_list.domain_id,
-                              memory_order_relaxed);
+  return dom_id_of_fl(&p->free_list);
 }
 
+#if OCAML_MULTICORE
 /* requires domain lock: NO
    requires pool lock: NO */
 static inline void pool_set_dom_id(pool *p, int dom_id)
@@ -133,12 +131,8 @@ static inline void pool_set_dom_id(pool *p, int dom_id)
   return atomic_store_explicit(&p->free_list.domain_id, dom_id,
                                memory_order_relaxed);
 }
-
 #else
-
-static inline int dom_id_of_pool(pool *p) { (void)p; return 0; }
 static inline void pool_set_dom_id(pool *p, int n) { (void)p; (void)n; }
-
 #endif // OCAML_MULTICORE
 
 static pool_rings * init_pool_rings(int dom_id);
@@ -320,11 +314,11 @@ static pool * get_empty_pool()
   if (p == NULL) return NULL;
   incr(&stats.total_alloced_pools);
   ring_link(p, p);
-  pool_set_dom_id(p, -1);
   p->class = UNTRACKED;
   p->free_list.next = p->roots;
   p->free_list.size = POOL_CAPACITY;
   p->free_list.end = &p->roots[POOL_CAPACITY - 1];
+  pool_set_dom_id(p, -1);
   p->delayed_fl.next = &p->delayed_fl; // Empty free list. TODO: simplify
   p->delayed_fl.size = 0;
   p->delayed_fl.end = NULL;
@@ -393,6 +387,8 @@ static void set_current_pool(int dom_id, pool *p)
     pool_set_dom_id(p, dom_id);
     pools[dom_id]->current = p;
     p->class = YOUNG;
+    /* This assumption is made inside boxroot_delete */
+    DEBUGassert(&p->free_list == (boxroot_fl *)p);
     boxroot_current_fl[dom_id] = &p->free_list;
   } else {
     boxroot_current_fl[dom_id] = &empty_fl;
@@ -526,8 +522,11 @@ boxroot boxroot_alloc_slot_slow(value init)
   boxroot_check_thread_hooks();
 #endif
   int dom_id = Domain_id;
-  acquire_pool_rings(dom_id);
   pool_rings *local = pools[dom_id];
+  /* Initialize pool rings on this domain */
+  if (local == NULL) local = init_pool_rings(dom_id);
+  if (local == NULL) return NULL;
+  acquire_pool_rings(dom_id);
   pool *p = local->current;
   if (p != NULL) {
     gc_pool(p);
@@ -540,7 +539,7 @@ boxroot boxroot_alloc_slot_slow(value init)
   release_pool_rings(dom_id);
   if (p == NULL) return NULL;
   DEBUGassert(0 != p->free_list.size);
-  return boxroot_alloc_slot(&p->free_list, init);
+  return boxroot_create(init);
 }
 
 /* }}} */
@@ -550,56 +549,45 @@ boxroot boxroot_alloc_slot_slow(value init)
 extern inline value boxroot_get(boxroot root);
 extern inline value const * boxroot_get_ref(boxroot root);
 
-extern inline boxroot boxroot_alloc_slot(boxroot_fl *fl, value init);
-
-/* requires domain lock: YES
-   requires pool lock: NO */
-boxroot boxroot_create_noinline(value init)
+void boxroot_create_debug(value init)
 {
-  int dom_id = Domain_id;
-  if (DEBUG) {
-    assert_domain_lock_held(dom_id);
-    if (Is_block(init) && Is_young(init)) incr(&stats.total_create_young);
-    else incr(&stats.total_create_old);
-  }
-  /* Find current freelist. Synchronized by domain lock. */
-  boxroot_fl *fl = boxroot_current_fl[dom_id];
-  if (BOXROOT_UNLIKELY(fl == NULL)) {
-    pool_rings *local = init_pool_rings(dom_id);
-    if (local == NULL) return NULL;
-    fl = &local->current->free_list;
-  }
-  boxroot br = boxroot_alloc_slot(fl, init);
-  return br;
+  assert_domain_lock_held(Domain_id);
+  if (Is_block(init) && Is_young(init)) incr(&stats.total_create_young);
+  else incr(&stats.total_create_old);
 }
 
 extern inline boxroot boxroot_create(value init);
 
-extern inline int boxroot_free_slot(boxroot_fl *fl, slot *s);
+/* Needed to avoid linking error with Rust */
+extern inline int boxroot_free_slot(boxroot_fl *fl, boxroot root);
+
+void boxroot_delete_debug(boxroot root)
+{
+  DEBUGassert(root != NULL);
+  value v = boxroot_get(root);
+  if (Is_block(v) && Is_young(v)) incr(&stats.total_delete_young);
+  else incr(&stats.total_delete_old);
+}
 
 /* requires domain lock: NO
    requires pool lock: NO */
-void boxroot_delete_noinline(boxroot root)
+void boxroot_delete_slow(boxroot root)
 {
-  DEBUGassert(root != NULL);
-  if (DEBUG) {
-    value v = boxroot_get(root);
-    if (Is_block(v) && Is_young(v)) incr(&stats.total_delete_young);
-    else incr(&stats.total_delete_old);
-  }
-  slot *s = (slot *)root;
-  pool *p = get_pool_header(s);
+  /* recomputing these avoids spilling in boxroot_delete */
+  pool *p = get_pool_header((slot)root);
   int dom_id = dom_id_of_pool(p);
-  if (!boxroot_domain_lock_held(dom_id)) {
-    /* remote deallocation */
-    int remote_dom_id = acquire_pool_rings_of_pool(p);
-    boxroot_free_slot(&p->delayed_fl, s);
-    release_pool_rings(remote_dom_id);
-  } else if (boxroot_free_slot(&p->free_list, s)) {
-    /* deallocation done, and we passed a deallocation threshold */
+  int local = boxroot_domain_lock_held(dom_id);
+  if (local) {
+    /* deallocation already done, but we passed a deallocation
+       threshold */
     acquire_pool_rings(dom_id);
     try_demote_pool(p);
     release_pool_rings(dom_id);
+  } else {
+    /* delayed deallocation */
+    int remote_dom_id = acquire_pool_rings_of_pool(p);
+    boxroot_free_slot(&p->delayed_fl, root);
+    release_pool_rings(remote_dom_id);
   }
 }
 

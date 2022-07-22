@@ -5,6 +5,7 @@
 #define CAML_NAME_SPACE
 
 #include <caml/mlvalues.h>
+#include "ocaml_hooks.h"
 #include "platform.h"
 
 typedef struct boxroot_private* boxroot;
@@ -85,17 +86,25 @@ extern boxroot_fl *boxroot_current_fl[Num_domains + 1];
 
 boxroot boxroot_alloc_slot_slow(value);
 
-inline boxroot boxroot_alloc_slot(boxroot_fl *fl, value init)
+void boxroot_create_debug(value v);
+
+inline boxroot boxroot_create(value init)
 {
+#if defined(BOXROOT_DEBUG) && (BOXROOT_DEBUG == 1)
+  boxroot_create_debug(init);
+#endif
+  /* Find current freelist. Synchronized by domain lock. */
+  boxroot_fl *fl = boxroot_current_fl[Domain_id];
+  if (BOXROOT_UNLIKELY(fl == NULL)) goto slow;
   int free_count = fl->size;
   void *new_root = fl->next;
-  if (BOXROOT_UNLIKELY(free_count == 0))
-    // pool full, not allocated, or not initialized
-    return boxroot_alloc_slot_slow(init);
+  if (BOXROOT_UNLIKELY(free_count == 0)) goto slow;
   fl->size = free_count - 1;
   fl->next = *((void **)new_root);
   *((value *)new_root) = init;
   return (boxroot)new_root;
+slow:
+  return boxroot_alloc_slot_slow(init);
 }
 
 /* Log of the size of the pools (12 = 4KB, an OS page).
@@ -116,8 +125,16 @@ void boxroot_try_demote_pool(boxroot_fl *p);
 #define Get_pool_header(s)                                \
   ((void *)((uintptr_t)s & ~((uintptr_t)POOL_SIZE - 1)))
 
-inline int boxroot_free_slot(boxroot_fl *fl, void **s)
+#if OCAML_MULTICORE
+#define dom_id_of_fl(fl) \
+  atomic_load_explicit(&(fl)->domain_id, memory_order_relaxed);
+#else
+#define dom_id_of_fl(fl) ((void)(fl),0)
+#endif
+
+inline int boxroot_free_slot(boxroot_fl *fl, boxroot root)
 {
+  void **s = (void **)root;
   *s = (void *)fl->next;
   fl->next = s;
   int free_count = fl->size;
@@ -126,9 +143,19 @@ inline int boxroot_free_slot(boxroot_fl *fl, void **s)
   return ((POOL_CAPACITY - 1 - free_count) & (DEALLOC_THRESHOLD - 1)) == 0;
 }
 
-boxroot boxroot_create_noinline(value v);
-void boxroot_delete_noinline(boxroot root);
-inline boxroot boxroot_create(value v) { return boxroot_create_noinline(v); }
-inline void boxroot_delete(boxroot root) { boxroot_delete_noinline(root); }
+void boxroot_delete_debug(boxroot root);
+void boxroot_delete_slow(boxroot root);
+
+inline void boxroot_delete(boxroot root)
+{
+#if defined(BOXROOT_DEBUG) && (BOXROOT_DEBUG == 1)
+  boxroot_delete_debug(root);
+#endif
+  boxroot_fl *fl = Get_pool_header(root);
+  int dom_id = dom_id_of_fl(fl);
+  if (!boxroot_domain_lock_held(dom_id)
+      || BOXROOT_UNLIKELY(boxroot_free_slot(fl, root)))
+    boxroot_delete_slow(root);
+}
 
 #endif // BOXROOT_H
