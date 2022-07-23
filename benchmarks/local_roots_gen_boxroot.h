@@ -38,6 +38,10 @@ value MY(root_fixpoint)(value f, value x)
 value MY(root_setup_caml)(value unit)
 {
   if (!MY(root_setup)()) caml_failwith("root_setup_caml");
+  /* We do not want to measure the overhead of reaching a deallocation
+     threshold repeatedly. For this we preallocate an root which will
+     never be deallocated. */
+  MY(root_create)(Val_unit);
   return unit;
 }
 
