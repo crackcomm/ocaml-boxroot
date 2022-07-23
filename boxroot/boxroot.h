@@ -84,9 +84,8 @@ typedef struct {
 
 extern boxroot_fl *boxroot_current_fl[Num_domains + 1];
 
-boxroot boxroot_alloc_slot_slow(value);
-
 void boxroot_create_debug(value v);
+boxroot boxroot_create_slow(value v);
 
 /* Test the overheads of multithreading (systhreads and multicore).
    Purely for experimental purposes. Otherwise should always be 1. */
@@ -107,7 +106,7 @@ inline boxroot boxroot_create(value init)
   *((value *)new_root) = init;
   return (boxroot)new_root;
 slow:
-  return boxroot_alloc_slot_slow(init);
+  return boxroot_create_slow(init);
 }
 
 /* Log of the size of the pools (12 = 4KB, an OS page).

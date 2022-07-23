@@ -203,8 +203,10 @@ static struct {
   stat_t major_collections;
   stat_t total_create_young;
   stat_t total_create_old;
+  stat_t total_create_slow;
   stat_t total_delete_young;
   stat_t total_delete_old;
+  stat_t total_delete_slow;
   stat_t total_modify;
   stat_t total_scanning_work_minor;
   stat_t total_scanning_work_major;
@@ -527,8 +529,9 @@ static int status = NOT_SETUP;
 // Set an available pool as current and allocate from it.
 /* requires domain lock: YES
    requires pool lock: NO */
-boxroot boxroot_alloc_slot_slow(value init)
+boxroot boxroot_create_slow(value init)
 {
+  incr(&stats.total_create_slow);
   // We might be here because boxroot is not setup.
   if (status != RUNNING) return NULL;
 #if !OCAML_MULTICORE
@@ -586,6 +589,7 @@ void boxroot_delete_debug(boxroot root)
    requires pool lock: NO */
 void boxroot_delete_slow(boxroot root)
 {
+  incr(&stats.total_delete_slow);
   /* recomputing these avoids spilling in boxroot_delete */
   pool *p = get_pool_header((slot)root);
   int dom_id = dom_id_of_pool(p);
@@ -1068,8 +1072,12 @@ void boxroot_print_stats()
   double ring_operations_per_pool =
     average(stats.ring_operations, stats.total_alloced_pools);
 
-  printf("total ring operations: %'lld\n"
+  printf("total boxroot_create_slow: %'lld\n"
+         "total boxroot_delete_slow: %'lld\n"
+         "total ring operations: %'lld\n"
          "ring operations per pool: %.2f\n",
+         stats.total_create_slow,
+         stats.total_delete_slow,
          stats.ring_operations,
          ring_operations_per_pool);
 
