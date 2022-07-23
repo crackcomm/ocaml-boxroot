@@ -119,8 +119,6 @@ slow:
    power of 2. */
 #define DEALLOC_THRESHOLD ((int)POOL_SIZE / 2)
 
-void boxroot_try_demote_pool(boxroot_fl *p);
-
 #define Get_pool_header(s)                                \
   ((void *)((uintptr_t)s & ~((uintptr_t)POOL_SIZE - 1)))
 

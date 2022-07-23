@@ -415,26 +415,21 @@ static void reclassify_pool(pool **source, int dom_id, class cl);
 /* Move not-too-full pools to the front; move empty pools to the free
    ring. */
 /* requires domain lock: YES
-   requires pool lock: YES */
+   requires pool lock: NO */
 static void try_demote_pool(pool *p)
 {
   DEBUGassert(p->class != UNTRACKED);
   int dom_id = dom_id_of_pool(p);
   pool_rings *remote = pools[dom_id];
   if (p == remote->current || !is_not_too_full(p)) return;
+  acquire_pool_rings(dom_id);
   class cl = (p->free_list.alloc_count == 0) ? UNTRACKED : p->class;
   /* If the pool is at the head of its ring, the new head must be
      recorded. */
   pool **source = (p == remote->old) ? &remote->old :
                   (p == remote->young) ? &remote->young : &p;
   reclassify_pool(source, dom_id, cl);
-}
-
-/* requires domain lock: YES
-   requires pool lock: YES */
-void boxroot_try_demote_pool(boxroot_fl *fl)
-{
-  try_demote_pool((pool *)fl);
+  release_pool_rings(dom_id);
 }
 
 /* requires domain lock: YES
@@ -597,9 +592,7 @@ void boxroot_delete_slow(boxroot root)
   if (local) {
     /* deallocation already done, but we passed a deallocation
        threshold */
-    acquire_pool_rings(dom_id);
     try_demote_pool(p);
-    release_pool_rings(dom_id);
   } else {
     /* delayed deallocation */
     int remote_dom_id = acquire_pool_rings_of_pool(p);
