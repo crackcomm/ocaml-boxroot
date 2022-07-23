@@ -62,10 +62,10 @@ typedef struct pool {
   slot roots[];
 } pool;
 
-static_assert(POOL_SIZE / sizeof(slot) <= INT_MAX, "pool size too large");
+#define POOL_CAPACITY ((int)((POOL_SIZE - sizeof(pool)) / sizeof(slot)))
 
-static_assert(sizeof(slot) * POOL_CAPACITY + sizeof(pool) <= POOL_SIZE,
-              "POOL_CAPACITY mismatch");
+static_assert(POOL_SIZE / sizeof(slot) <= INT_MAX, "pool size too large");
+static_assert(POOL_CAPACITY >= 1, "pool size too small");
 
 /* }}} */
 
@@ -105,7 +105,7 @@ static pool_rings *pools[Num_domains + 1] = { NULL };
 static boxroot_fl empty_fl =
   { (slot)&empty_fl
     , NULL
-    , 0
+    , -1
 #if OCAML_MULTICORE
     , -1
 #endif
@@ -250,6 +250,12 @@ static inline int is_pool_member(slot v, pool *p)
   return (uintptr_t)p == ((uintptr_t)v & ~((uintptr_t)POOL_SIZE - 2));
 }
 
+// hot path
+static inline int is_empty_free_list(slot *v, pool *p)
+{
+  return (v == (slot *)p);
+}
+
 /* }}} */
 
 /* {{{ Ring operations */
@@ -303,6 +309,15 @@ static pool * ring_pop(pool **target)
 
 /* {{{ Pool management */
 
+/* the empty free-list for a pool p is denoted by a pointer to the
+   pool itself (NULL could be a valid value for an element slot) */
+static inline slot empty_free_list(pool *p) { return (slot)p; }
+
+static inline int is_full_pool(pool *p)
+{
+  return is_empty_free_list(p->free_list.next, p);
+}
+
 /* requires domain lock: NO
    requires pool lock: NO */
 static pool * get_empty_pool()
@@ -316,14 +331,14 @@ static pool * get_empty_pool()
   ring_link(p, p);
   p->class = UNTRACKED;
   p->free_list.next = p->roots;
-  p->free_list.size = POOL_CAPACITY;
+  p->free_list.alloc_count = 0;
   p->free_list.end = &p->roots[POOL_CAPACITY - 1];
   pool_set_dom_id(p, -1);
   p->delayed_fl.next = &p->delayed_fl; // Empty free list. TODO: simplify
-  p->delayed_fl.size = 0;
+  p->delayed_fl.alloc_count = 0;
   p->delayed_fl.end = NULL;
   /* We end the freelist with a dummy value which satisfies is_pool_member */
-  p->roots[POOL_CAPACITY - 1] = p;
+  p->roots[POOL_CAPACITY - 1] = empty_free_list(p);
   for (slot *s = p->roots + POOL_CAPACITY - 2; s >= p->roots; --s) {
     *s = (slot)(s + 1);
   }
@@ -334,10 +349,10 @@ static pool * get_empty_pool()
    requires pool lock: YES */
 static void gc_pool(pool *p)
 {
-  if (0 == p->delayed_fl.size) return;
-  if (0 == p->free_list.size) p->free_list.end = p->delayed_fl.end;
-  p->free_list.size += p->delayed_fl.size;
-  p->delayed_fl.size = 0;
+  if (0 == p->delayed_fl.alloc_count) return;
+  if (is_full_pool(p)) p->free_list.end = p->delayed_fl.end;
+  p->free_list.alloc_count += p->delayed_fl.alloc_count;
+  p->delayed_fl.alloc_count = 0;
   void *list = p->free_list.next;
   p->free_list.next = p->delayed_fl.next;
   p->delayed_fl.next = &p->delayed_fl; // Empty free list
@@ -369,13 +384,11 @@ static void free_pool_rings(pool_rings *ps)
 
 /* {{{ Pool class management */
 
-#define alloc_count(p) (POOL_CAPACITY - (p)->free_list.size)
-
 /* requires domain lock: YES
    requires pool lock: NO */
 static inline int is_not_too_full(pool *p)
 {
-  return alloc_count(p) <= (int)(DEALLOC_THRESHOLD / sizeof(slot));
+  return p->free_list.alloc_count <= (int)(DEALLOC_THRESHOLD / sizeof(slot));
 }
 
 /* requires domain lock: YES
@@ -407,7 +420,7 @@ static void try_demote_pool(pool *p)
   int dom_id = dom_id_of_pool(p);
   pool_rings *remote = pools[dom_id];
   if (p == remote->current || !is_not_too_full(p)) return;
-  class cl = (alloc_count(p) == 0) ? UNTRACKED : p->class;
+  class cl = (p->free_list.alloc_count == 0) ? UNTRACKED : p->class;
   /* If the pool is at the head of its ring, the new head must be
      recorded. */
   pool **source = (p == remote->old) ? &remote->old :
@@ -430,7 +443,7 @@ static inline pool * pop_available(pool **target)
      When they fill up, they are pushed to the back. Thus, if the
      first one is full, then none of the next ones are empty
      enough. */
-  if (*target == NULL || 0 == (*target)->free_list.size) return NULL;
+  if (*target == NULL || is_full_pool(*target)) return NULL;
   return ring_pop(target);
 }
 
@@ -530,7 +543,7 @@ boxroot boxroot_alloc_slot_slow(value init)
   pool *p = local->current;
   if (p != NULL) {
     gc_pool(p);
-    if (0 == p->free_list.size) {
+    if (is_full_pool(p)) {
       p = NULL;
       reclassify_pool(&local->current, dom_id, YOUNG);
     }
@@ -538,7 +551,7 @@ boxroot boxroot_alloc_slot_slow(value init)
   if (p == NULL) p = find_available_pool(dom_id);
   release_pool_rings(dom_id);
   if (p == NULL) return NULL;
-  DEBUGassert(0 != p->free_list.size);
+  DEBUGassert(!is_full_pool(p));
   return boxroot_create(init);
 }
 
@@ -654,13 +667,14 @@ static void validate_pool(pool *pl)
     return;
   }
   // check freelist structure and length
-  int free_count = pl->free_list.size;
   slot *curr = pl->free_list.next;
-  while (free_count--) {
+  int pos = 0;
+  for (; !is_empty_free_list(curr, pl); curr = (slot*)*curr, pos++)
+  {
+    assert(pos < POOL_CAPACITY);
     assert(curr >= pl->roots && curr < pl->roots + POOL_CAPACITY);
-    curr = (slot*)*curr;
   }
-  assert(curr == (void *)pl);
+  assert(pos == POOL_CAPACITY - pl->free_list.alloc_count);
   // check count of allocated elements
   int count = 0;
   for(int i = 0; i < POOL_CAPACITY; i++) {
@@ -672,7 +686,7 @@ static void validate_pool(pool *pl)
       ++count;
     }
   }
-  assert(count == alloc_count(pl));
+  assert(count == pl->free_list.alloc_count);
 }
 
 /* requires domain lock: YES
@@ -746,7 +760,7 @@ static void gc_and_reclassify_pool(pool **source, int dom_id)
 {
   pool *p = *source;
   gc_pool(p);
-  if (alloc_count(p) == 0) reclassify_pool(source, dom_id, UNTRACKED);
+  if (p->free_list.alloc_count == 0) reclassify_pool(source, dom_id, UNTRACKED);
   else if (is_not_too_full(p)) reclassify_pool(source, dom_id, p->class);
 }
 
@@ -766,7 +780,7 @@ static void gc_ring(pool **ring, int dom_id)
   /* GC the head of the ring while we are still at the head. */
   while (p == *ring) {
     pool *next = p->next;
-    if (p->delayed_fl.size != 0)
+    if (p->delayed_fl.alloc_count != 0)
       gc_and_reclassify_pool(ring, dom_id);
     if (p == next)
       /* There was only one pool left in the ring */
@@ -776,7 +790,7 @@ static void gc_ring(pool **ring, int dom_id)
   /* Now p != *ring, and things become easier */
   do {
     pool *next = p->next;
-    if (p->delayed_fl.size != 0)
+    if (p->delayed_fl.alloc_count != 0)
       gc_and_reclassify_pool(&p, dom_id);
     p = next;
   } while (p != *ring);
@@ -806,7 +820,7 @@ static void gc_pool_rings(int dom_id)
    requires pool lock: YES */
 static int scan_pool_gen(scanning_action action, void *data, pool *pl)
 {
-  int allocs_to_find = alloc_count(pl);
+  int allocs_to_find = pl->free_list.alloc_count;
   int young_hit = 0;
   slot *current = pl->roots;
   while (allocs_to_find) {
@@ -957,7 +971,7 @@ static double average(long long total, long long units)
 
 static int ring_used(pool *p)
 {
-  return p != NULL && (alloc_count(p) != 0 || p->next != p);
+  return p != NULL && (p->free_list.alloc_count != 0 || p->next != p);
 }
 
 /* TODO: thread-safe; simplify */

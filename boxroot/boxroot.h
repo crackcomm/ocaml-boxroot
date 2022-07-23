@@ -76,7 +76,7 @@ typedef struct {
   /* if non-empty, points to last cell */
   void *end;
   /* length of the list */
-  int size;
+  int alloc_count;
 #if OCAML_MULTICORE
   atomic_int domain_id;
 #endif
@@ -100,11 +100,10 @@ inline boxroot boxroot_create(value init)
   /* Find current freelist. Synchronized by domain lock. */
   boxroot_fl *fl = boxroot_current_fl[Domain_id];
   if (BOXROOT_MULTITHREAD && BOXROOT_UNLIKELY(fl == NULL)) goto slow;
-  int free_count = fl->size;
   void *new_root = fl->next;
-  if (BOXROOT_UNLIKELY(free_count == 0)) goto slow;
-  fl->size = free_count - 1;
+  if (BOXROOT_UNLIKELY(new_root == fl)) goto slow;
   fl->next = *((void **)new_root);
+  fl->alloc_count++;
   *((value *)new_root) = init;
   return (boxroot)new_root;
 slow:
@@ -121,9 +120,6 @@ slow:
    power of 2. */
 #define DEALLOC_THRESHOLD ((int)POOL_SIZE / 2)
 
-#define POOL_HD_SIZE 9 /* implementation-specific */
-#define POOL_CAPACITY ((int)(POOL_SIZE / sizeof(void *) - POOL_HD_SIZE))
-
 void boxroot_try_demote_pool(boxroot_fl *p);
 
 #define Get_pool_header(s)                                \
@@ -139,12 +135,12 @@ void boxroot_try_demote_pool(boxroot_fl *p);
 inline int boxroot_free_slot(boxroot_fl *fl, boxroot root)
 {
   void **s = (void **)root;
-  *s = (void *)fl->next;
+  void *n = (void *)fl->next;
+  *s = n;
+  if (BOXROOT_MULTITHREAD && BOXROOT_UNLIKELY(n == fl)) fl->end = s;
   fl->next = s;
-  int free_count = fl->size;
-  if (BOXROOT_MULTITHREAD && BOXROOT_UNLIKELY(free_count == 0)) fl->end = s;
-  fl->size = free_count + 1;
-  return ((POOL_CAPACITY - 1 - free_count) & (DEALLOC_THRESHOLD - 1)) == 0;
+  int alloc_count = --fl->alloc_count;
+  return (alloc_count & (DEALLOC_THRESHOLD - 1)) == 0;
 }
 
 void boxroot_delete_debug(boxroot root);
