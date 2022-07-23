@@ -742,6 +742,14 @@ static void adopt_orphaned_pools(int dom_id)
   release_pool_rings(Orphaned_id);
 }
 
+static void gc_and_reclassify_pool(pool **source, int dom_id)
+{
+  pool *p = *source;
+  gc_pool(p);
+  if (alloc_count(p) == 0) reclassify_pool(source, dom_id, UNTRACKED);
+  else if (is_not_too_full(p)) reclassify_pool(source, dom_id, p->class);
+}
+
 /* empty the delayed free lists in a ring and move the pools
    accordingly */
 /* requires domain lock: YES
@@ -750,13 +758,28 @@ static void gc_ring(pool **ring, int dom_id)
 {
   if (!BOXROOT_MULTITHREAD) return;
   pool *p = *ring;
-  *ring = NULL;
-  /* TODO more efficient */
-  while (p != NULL) {
-    gc_pool(p);
-    class cl = (alloc_count(p) == 0) ? UNTRACKED : p->class;
-    reclassify_pool(&p, dom_id, cl);
+  if (p == NULL) return;
+  /* This is a bit convoluted because we do in-place GC-ing of the
+     ring: we never move pools that did not need to be GCd. We
+     distinguish two cases: if we are at the head of the ring or
+     inside the tail. */
+  /* GC the head of the ring while we are still at the head. */
+  while (p == *ring) {
+    pool *next = p->next;
+    if (p->delayed_fl.size != 0)
+      gc_and_reclassify_pool(ring, dom_id);
+    if (p == next)
+      /* There was only one pool left in the ring */
+      return;
+    p = next;
   }
+  /* Now p != *ring, and things become easier */
+  do {
+    pool *next = p->next;
+    if (p->delayed_fl.size != 0)
+      gc_and_reclassify_pool(&p, dom_id);
+    p = next;
+  } while (p != *ring);
 }
 
 /* empty the delayed free lists in the chosen pool rings and
