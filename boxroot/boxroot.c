@@ -111,10 +111,8 @@ static boxroot_fl empty_fl =
 #endif
   };
 
-/* Domain 0 can be allocated-to without a mutex with OCaml 4; make
-   sure to have a clean error if boxroot is not setup. TODO: update */
 /* Synchronisation: via domain lock */
-boxroot_fl *boxroot_current_fl[Num_domains + 1] = { &empty_fl /*, NULL... */ };
+boxroot_fl *boxroot_current_fl[Num_domains + 1];
 
 /* requires domain lock: NO
    requires pool lock: NO */
@@ -510,7 +508,7 @@ static void promote_young_pools(int dom_id)
 
 /* {{{ Allocation, deallocation */
 
-enum { NOT_SETUP, RUNNING, FREED };
+enum { NOT_SETUP, RUNNING, ERROR };
 
 /* Thread-safety: see documented constraints on the use of
    boxroot_setup and boxroot_teardown. */
@@ -520,14 +518,17 @@ static atomic_int status = NOT_SETUP;
 static int status = NOT_SETUP;
 #endif
 
+static int setup();
+
 // Set an available pool as current and allocate from it.
 /* requires domain lock: YES
    requires pool lock: NO */
 boxroot boxroot_create_slow(value init)
 {
   incr(&stats.total_create_slow);
+  if (Caml_state_opt == NULL) return NULL;
   // We might be here because boxroot is not setup.
-  if (status != RUNNING) return NULL;
+  if (status != RUNNING && 0 == setup()) return NULL;
 #if !OCAML_MULTICORE
   boxroot_check_thread_hooks();
 #endif
@@ -1146,24 +1147,29 @@ static mutex_t init_mutex = BOXROOT_MUTEX_INITIALIZER;
 
 /* requires domain lock: YES
    requires pool lock: NO */
-int boxroot_setup()
+static int setup()
 {
   boxroot_mutex_lock(&init_mutex);
-  if (status != NOT_SETUP) {
-    boxroot_mutex_unlock(&init_mutex);
-    return 0;
-  }
-  assert(Caml_state_opt != NULL);
+  if (status == RUNNING) goto out;
+  if (status == ERROR) goto out_err;
   boxroot_setup_hooks(&scanning_callback, &domain_termination_callback);
   /* Domain 0 can be accessed without going through acquire_pool_rings
      on OCaml 4 without mutex, so we need to initialize it right away. */
-  init_pool_rings(0);
-  init_pool_rings(Orphaned_id);
+  if (NULL == init_pool_rings(Orphaned_id)) goto out_err;
   // we are done
   status = RUNNING;
+  // fall through
+ out:
   boxroot_mutex_unlock(&init_mutex);
   return 1;
+ out_err:
+  status = ERROR;
+  boxroot_mutex_unlock(&init_mutex);
+  return 0;
 }
+
+/* obsolete */
+int boxroot_setup() { return 1; }
 
 /* requires domain lock: NO
    requires pool lock: NO
@@ -1174,7 +1180,7 @@ void boxroot_teardown()
 {
   boxroot_mutex_lock(&init_mutex);
   if (status != RUNNING) goto out;
-  status = FREED;
+  status = ERROR;
   for (int i = 0; i < Num_domains; i++) {
     pool_rings *ps = pools[i];
     if (ps == NULL) continue;
