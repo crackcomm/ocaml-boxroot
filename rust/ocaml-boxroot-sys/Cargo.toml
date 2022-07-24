@@ -1,10 +1,12 @@
 [package]
 name = "ocaml-boxroot-sys"
 version = "0.3.0"
-authors = ["Bruno Deferrari <utizoc@gmail.com>"]
+authors = ["Guillaume Munch-Maccagnoni <Guillaume.Munch-Maccagnoni@inria.fr>",
+           "Gabriel Scherer <Gabriel.Scherer@inria.fr>",
+           "Bruno Deferrari <utizoc@gmail.com>"]
 edition = "2018"
 license = "MIT"
-description = "Bindings for ocaml-boxroot"
+description = "Boxroot for OCaml: fast movable GC roots (Rust packaging)"
 homepage = "https://gitlab.com/ocaml-rust/ocaml-boxroot"
 repository = "https://gitlab.com/ocaml-rust/ocaml-boxroot"
 keywords = ["ocaml", "rust", "ffi"]
