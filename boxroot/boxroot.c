@@ -1152,7 +1152,7 @@ void boxroot_teardown()
   boxroot_mutex_lock(&init_mutex);
   if (status != RUNNING) goto out;
   status = ERROR;
-  for (int i = 0; i < Num_domains; i++) {
+  for (int i = 0; i < Num_domains + 1; i++) {
     pool_rings *ps = pools[i];
     if (ps == NULL) continue;
     free_pool_rings(ps);
