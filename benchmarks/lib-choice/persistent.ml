@@ -1,3 +1,4 @@
+(* SPDX-License-Identifier: MIT *)
 module Ref = Ref.Config.Ref
 
 (* We want to implement a *linear* choice monad, in the sense that the

@@ -1,3 +1,4 @@
+(* SPDX-License-Identifier: MIT *)
 module Choice_config = Choice.Config
 module Choice = Choice_config.Choice
 open Choice.Syntax

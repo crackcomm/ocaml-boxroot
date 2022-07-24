@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT */
 #include "../../boxroot/dll_boxroot.h"
 
 #define MY_PREFIX dll_

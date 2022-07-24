@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT */
 #include "tagged_out_of_heap.h"
 
 extern inline value alloc_tagged_block();

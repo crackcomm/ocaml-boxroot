@@ -1,3 +1,4 @@
+(* SPDX-License-Identifier: MIT *)
 (* this *linear* function consumes the ownership of its argument *)
 type ('a, 'b) linfun = 'a -> 'b
 module type LinChoice = sig

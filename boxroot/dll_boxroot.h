@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT */
 #ifndef DLL_BOXROOT_H
 #define DLL_BOXROOT_H
 

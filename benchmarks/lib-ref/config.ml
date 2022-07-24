@@ -1,3 +1,4 @@
+(* SPDX-License-Identifier: MIT *)
 module type Ref = sig
   type 'a t
   val create : 'a -> 'a t

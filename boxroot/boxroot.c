@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT */
 /* {{{ Includes */
 
 // This is emacs folding-mode

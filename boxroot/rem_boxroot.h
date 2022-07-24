@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT */
 #ifndef REM_BOXROOT_H
 #define REM_BOXROOT_H
 
