@@ -6,8 +6,13 @@ Working version
 - Add support for OCaml 5.0 (multicore).
   (Guillaume Munch-Maccagnoni, review by Gabriel Scherer)
 
+- Avoid locking a mutex in the fast paths. The option
+  `BOXROOT_USE_MUTEX` is removed and the implementation is now
+  thread-safe by default.
+  (Guillaume Munch-Maccagnoni, review by Gabriel Scherer)
+
 - Clarify license (MIT license).
-  (Guillaume Munch-Maccagnoni)
+  (Guillaume Munch-Maccagnoni, review by Gabriel Scherer)
 
 ### Internal changes
 
