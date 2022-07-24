@@ -1149,7 +1149,10 @@ static mutex_t init_mutex = BOXROOT_MUTEX_INITIALIZER;
 int boxroot_setup()
 {
   boxroot_mutex_lock(&init_mutex);
-  if (status != NOT_SETUP) return 0;
+  if (status != NOT_SETUP) {
+    boxroot_mutex_unlock(&init_mutex);
+    return 0;
+  }
   assert(Caml_state_opt != NULL);
   boxroot_setup_hooks(&scanning_callback, &domain_termination_callback);
   /* Domain 0 can be accessed without going through acquire_pool_rings
@@ -1170,7 +1173,7 @@ int boxroot_setup()
 void boxroot_teardown()
 {
   boxroot_mutex_lock(&init_mutex);
-  if (status != RUNNING) return;
+  if (status != RUNNING) goto out;
   status = FREED;
   for (int i = 0; i < Num_domains; i++) {
     pool_rings *ps = pools[i];
@@ -1178,6 +1181,8 @@ void boxroot_teardown()
     free_pool_rings(ps);
     free(ps);
   }
+  // fall through
+ out:
   boxroot_mutex_unlock(&init_mutex);
 }
 
