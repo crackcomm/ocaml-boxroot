@@ -185,7 +185,6 @@ static pool_rings * alloc_pool_rings()
 // TODO simplify: no return
 static pool_rings * init_pool_rings(int dom_id)
 {
-  if (dom_id != Orphaned_id) assert_domain_lock_held(dom_id);
   pool_rings *local = pools[dom_id];
   if (local == NULL) local = alloc_pool_rings();
   if (local == NULL) return NULL;
@@ -562,7 +561,7 @@ extern inline value const * boxroot_get_ref(boxroot root);
 
 void boxroot_create_debug(value init)
 {
-  assert_domain_lock_held(Domain_id);
+  DEBUGassert(Caml_state_opt != NULL);
   if (Is_block(init) && Is_young(init)) incr(&stats.total_create_young);
   else incr(&stats.total_create_old);
 }
@@ -1151,7 +1150,7 @@ int boxroot_setup()
 {
   boxroot_mutex_lock(&init_mutex);
   if (status != NOT_SETUP) return 0;
-  assert_domain_lock_held(Domain_id);
+  assert(Caml_state_opt != NULL);
   boxroot_setup_hooks(&scanning_callback, &domain_termination_callback);
   /* Domain 0 can be accessed without going through acquire_pool_rings
      on OCaml 4 without mutex, so we need to initialize it right away. */

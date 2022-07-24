@@ -9,7 +9,7 @@
 
 inline int boxroot_domain_lock_held(int dom_id)
 {
-  caml_domain_state *dom_st = Caml_state;
+  caml_domain_state *dom_st = Caml_state_opt;
   return BOXROOT_LIKELY(dom_st != NULL)
     && BOXROOT_LIKELY(dom_st->id == dom_id);
 }
@@ -73,22 +73,14 @@ void boxroot_setup_hooks(boxroot_scanning_callback scanning,
 
 int boxroot_in_minor_collection();
 
-#if OCAML_MULTICORE
-
-#define assert_domain_lock_held(dom_id)         \
-  (assert(boxroot_domain_lock_held(dom_id)))
-
-#else
-
-/* Disabled because unreliable */
-#define assert_domain_lock_held(dom_id) do {} while (0)
+#if !OCAML_MULTICORE
 
 /* Used to regularly check that the hooks have not been overwritten.
    If they have, we reinstall them. Assumes that only systhreads
    modifies them.*/
 void boxroot_check_thread_hooks();
 
-#endif // OCAML_MULTICORE
+#endif // !OCAML_MULTICORE
 
 #endif // CAML_INTERNALS
 

@@ -29,6 +29,7 @@
 
 #define Num_domains 1
 #define Domain_id 0
+#define Caml_state_opt Caml_state
 
 #endif // OCAML_MULTICORE
 
