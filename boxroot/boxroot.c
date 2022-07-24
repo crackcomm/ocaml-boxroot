@@ -966,28 +966,6 @@ static double average(long long total, long long units)
   return ((double)total) / (double)units;
 }
 
-static int ring_used(pool *p)
-{
-  return p != NULL && (p->free_list.alloc_count != 0 || p->next != p);
-}
-
-/* TODO: thread-safe; simplify */
-static int boxroot_used()
-{
-  if (ring_used(pools[0]->old)
-      || ring_used(pools[0]->young)
-      || ring_used(pools[0]->current))
-    return 1;
-  for (int i = 1; i < Num_domains; i++) {
-    if (pools[i] != NULL) return 1;
-  }
-  if (ring_used(pools[Orphaned_id]->old)
-      || ring_used(pools[Orphaned_id]->young)
-      || ring_used(pools[Orphaned_id]->current))
-    return 1;
-  return 0;
-}
-
 void boxroot_print_stats()
 {
   printf("minor collections: %'lld\n"
@@ -1112,23 +1090,16 @@ static void scanning_callback(scanning_action action, int only_young,
   int dom_id = Domain_id;
   if (pools[dom_id] == NULL) return; /* synchronised by domain lock */
   acquire_pool_rings(dom_id);
-  // If no boxroot has been allocated, then scan_roots should not have
-  // any noticeable cost. For experimental purposes, since this hook
-  // is also used for other the statistics of other implementations,
-  // we further make sure of this with an extra test, by avoiding
-  // calling scan_roots if it has only just been initialised.
-  if (boxroot_used()) {
 #if !OCAML_MULTICORE
-    boxroot_check_thread_hooks();
+  boxroot_check_thread_hooks();
 #endif
-    long long start = time_counter();
-    scan_roots(action, only_young, data, dom_id);
-    long long duration = time_counter() - start;
-    stat_t *total = in_minor_collection ? &stats.total_minor_time : &stats.total_major_time;
-    stat_t *peak = in_minor_collection ? &stats.peak_minor_time : &stats.peak_major_time;
-    *total += duration;
-    if (duration > *peak) *peak = duration; // racy, but whatever
-  }
+  long long start = time_counter();
+  scan_roots(action, only_young, data, dom_id);
+  long long duration = time_counter() - start;
+  stat_t *total = in_minor_collection ? &stats.total_minor_time : &stats.total_major_time;
+  stat_t *peak = in_minor_collection ? &stats.peak_minor_time : &stats.peak_major_time;
+  *total += duration;
+  if (duration > *peak) *peak = duration; // racy, but whatever
   release_pool_rings(dom_id);
 }
 
