@@ -53,7 +53,7 @@ type Ref containing a single value with an imperative interface
 (`create`, `get`, `delete`, `modify`):
 
 - `ocaml`: an OCaml implementation using a mutable record, with
-  deletion implemented by assigning `()` using Obj.magic.
+  deletion implemented by assigning `()` using Obj.magic. TODO: update.
 - `gc`: a C implementation of the previous using
   `caml_alloc_small(1,0)`,
 - `boxroot`: a `boxroot` disguised as an immediate (reference

@@ -5,12 +5,30 @@ type impl = {
   stats: unit -> unit;
 }
 
+(* OCaml, no indirection *)
+let rec ocaml_fixpoint f x =
+  let y = f x in
+  if 0 = Float.compare x y then y
+  else ocaml_fixpoint f y
+
+(* OCaml, with indirection *)
+let rec ocaml_ref_fixpoint_rec f x =
+  let y = ref (!f !x) in
+  if 0 = Float.compare !x !y then y
+  else ocaml_ref_fixpoint_rec f y
+
+let ocaml_ref_fixpoint f x =
+  let fr = ref f in
+  let xr = ref x in
+  !(ocaml_ref_fixpoint_rec fr xr)
+
 external local_fixpoint : (float -> float) -> float -> float = "local_fixpoint"
 external naive_fixpoint : (float -> float) -> float -> float = "naive_fixpoint"
 external boxroot_fixpoint : (float -> float) -> float -> float = "boxroot_fixpoint"
 external dll_boxroot_fixpoint : (float -> float) -> float -> float = "dll_boxroot_fixpoint"
 external rem_boxroot_fixpoint : (float -> float) -> float -> float = "rem_boxroot_fixpoint"
 external generational_fixpoint : (float -> float) -> float -> float = "generational_root_fixpoint"
+external global_fixpoint : (float -> float) -> float -> float = "global_root_fixpoint"
 
 external boxroot_setup : unit -> unit = "boxroot_setup_caml"
 external boxroot_teardown : unit -> unit = "boxroot_teardown_caml"
@@ -32,8 +50,29 @@ let local = {
   stats = ignore;
 }
 
+let ocaml = {
+  fixpoint = ocaml_fixpoint;
+  setup = ignore;
+  teardown = ignore;
+  stats = ignore;
+}
+
+let ocaml_ref = {
+  fixpoint = ocaml_ref_fixpoint;
+  setup = ignore;
+  teardown = ignore;
+  stats = ignore;
+}
+
 let generational = {
   fixpoint = generational_fixpoint;
+  setup = ignore;
+  teardown = ignore;
+  stats = ignore;
+}
+
+let global = {
+  fixpoint = global_fixpoint;
   setup = ignore;
   teardown = ignore;
   stats = ignore;
@@ -69,11 +108,14 @@ let rem_boxroot = {
 
 let implementations = [
   "local", local;
+  "ocaml", ocaml;
+  "ocaml_ref", ocaml_ref;
   "naive", naive;
   "boxroot", boxroot;
   "dll_boxroot", dll_boxroot;
   "rem_boxroot", rem_boxroot;
   "generational", generational;
+  "global", global;
 ]
 
 let impl =
