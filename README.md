@@ -48,13 +48,15 @@ benchmarks.
 
 ### Implementations
 
-The benchmarks compares various implementation of an OCaml reference
-type Ref containing a single value with an imperative interface
-(`create`, `get`, `delete`, `modify`):
+The benchmarks compares various implementation of a cell containing a
+single value with the same interface as boxroot (`create`, `get`,
+`delete`, `modify`):
 
-- `ocaml`: an OCaml implementation using a mutable record, with
-  deletion implemented by assigning `()` using Obj.magic. TODO: update.
-- `gc`: a C implementation of the previous using
+- `ocaml`: a pure OCaml implementation where `create` is the identity
+  and nothing happens on deletion.
+- `ocaml_ref`: a pure OCaml implementation using a mutable record, with
+  deletion implemented by assigning `()` using Obj.magic.
+- `gc`: a C implementation of the previous, using
   `caml_alloc_small(1,0)`,
 - `boxroot`: a `boxroot` disguised as an immediate (reference
   implementation described further below),
@@ -67,12 +69,14 @@ type Ref containing a single value with an imperative interface
 - `rem_boxroot`: a variant of `boxroot`, but using a simpler
   implementation using OCaml's remembered set.
 
-The various implementations have similar memory representation, some
-on the OCaml heap and some outside of the OCaml heap.
+The various implementations (except the first one) have similar memory
+representation, some on the OCaml heap and some outside of the OCaml
+heap.
 
 By selecting different implementations of Ref, we can evaluate the
 overhead of root registration and scanning for various root
-implementations, compared to non-rooting OCaml and C implementations.
+implementations, compared to non-rooting OCaml and C implementations,
+along with other factors.
 
 ### Benchmark information
 
