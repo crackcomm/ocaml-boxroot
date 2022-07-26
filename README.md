@@ -66,9 +66,9 @@ single value with the same interface as boxroot (`create`, `get`,
   immediate) containing a global root, and
 - `generational`: idem, but using a generational
   global root.
-- `dll_boxroot`: a variant of `boxroot`, but using a "naive"
+- `dll_boxroot`: a variant of `boxroot`, but using a simpler
   implementation with doubly-linked lists,
-- `rem_boxroot`: a variant of `boxroot`, but using a simpler
+- `rem_boxroot`: a variant of `boxroot`, but using a different
   implementation using OCaml's remembered set.
 
 The various implementations (except the first one) have similar memory
@@ -219,8 +219,8 @@ package their OCaml values in boxroots, whose ownership is
 passed to the callee. Creating boxroots is slower than
 registering local roots, but the caller-root discipline can
 avoid re-rooting each value when moving up and down the call
-chain, so it should have a performance advantage for deep call
-chains.
+chain, so it is expected to have a performance advantage for
+deep call chains.
 
 This benchmark performs a (recursive) fixpoint computation on
 OCaml floating-point value from C, with a parameter N that
@@ -335,25 +335,26 @@ N is a parameter determining the size of the pools. The bitmask is
 chosen to preserve the least significant bit, so that immediate OCaml
 values (with lsb set) are correctly classified.
 
-Scanning is set up by registering a root scanning hook with the OCaml
+Scanning is set up by registering a root-scanning hook with the OCaml
 GC, and done by traversing the pools linearly. An early-exit
 optimisation when all roots have been found ensures that programs that
 use few roots throughout the life of the program only pay for what
 they use.
 
 The memory pools are managed in several rings, according to their
-*class*. The class class distinguishes pools according to OCaml
-generations, as well as pools that are free (which need not be
-scanned). A pool is *young* if it is allowed to contain pointers to
-the minor heap. During minor collection, we only need to scan young
-pools. At the end of the minor collection, the young pools, now
-guaranteed to no longer point to any young value, are promoted into
-*old* pools.
+*class*. The class distinguishes pools according to OCaml generations,
+as well as pools that are free (which need not be scanned). A pool is
+*young* if it is allowed to contain pointers to the minor heap. During
+minor collection, we only need to scan young pools. At the end of the
+minor collection, the young pools, now guaranteed to no longer point
+to any young value, are promoted into *old* pools. We unconditionally
+allocate roots in young pools, to avoids testing at allocation-time
+whether their initial value is young or old.
 
 The rings are managed in such a manner that pools that are less than
 half-full are rotated to the start of the ring. This ensures that it
 is easy to find a pool for allocation. When the current pool is full,
-if no young pool is available, then we demote the first old pool into
+if no young pool is available then we demote the first old pool into
 a young pool, if it is less than half-full. (This pool contains major
 roots, but it is harmless to scan them during minor collection.)
 Otherwise we prefer to allocate a new pool.
@@ -373,4 +374,5 @@ pay any of the cost.
 
 * Due to limitations of the GC hook interface, no work has been done
   to scan roots incrementally. Holding a (very!) large number of roots
-  at the same time can negatively affect latency.
+  at the same time can negatively affect latency at the beginning of
+  major GC cycles.
