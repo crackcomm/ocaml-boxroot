@@ -60,6 +60,8 @@ single value with the same interface as boxroot (`create`, `get`,
   `caml_alloc_small(1,0)`,
 - `boxroot`: a `boxroot` disguised as an immediate (reference
   implementation described further below),
+- `naive`: like `boxroot`, but without taking advantage of the full
+  expressiveness of boxroot (for the local roots benchmark below)
 - `global`: a block allocated outside the OCaml heap (disguised as an
   immediate) containing a global root, and
 - `generational`: idem, but using a generational
@@ -200,6 +202,8 @@ are only a few young roots, for a pool size currently chosen large
 but it has been reduced thanks to an optimisation brought to scanning
 during minor collection.
 
+![Global roots benchmarks](global.svg)
+
 ### Local roots benchmark
 
 We designed this benchmark to test the idea of replacing local
@@ -285,84 +289,32 @@ The `naive` test uses boxroots in a callee-roots discipline.
 
 ```
 Benchmark: local_roots
----
-local_roots(ROOT=local       , N=1):    12.51ns
-local_roots(ROOT=boxroot     , N=1):    13.90ns
-local_roots(ROOT=dll_boxroot , N=1):    30.16ns
-local_roots(ROOT=rem_boxroot , N=1):    22.40ns
-local_roots(ROOT=naive       , N=1):    20.87ns
-local_roots(ROOT=generational, N=1):    50.76ns
----
-local_roots(ROOT=local       , N=2):    23.47ns
-local_roots(ROOT=boxroot     , N=2):    22.54ns
-local_roots(ROOT=dll_boxroot , N=2):    48.88ns
-local_roots(ROOT=rem_boxroot , N=2):    33.19ns
-local_roots(ROOT=naive       , N=2):    32.75ns
-local_roots(ROOT=generational, N=2):    99.74ns
----
-local_roots(ROOT=local       , N=3):    34.40ns
-local_roots(ROOT=boxroot     , N=3):    30.75ns
-local_roots(ROOT=dll_boxroot , N=3):    58.05ns
-local_roots(ROOT=rem_boxroot , N=3):    43.53ns
-local_roots(ROOT=naive       , N=3):    44.02ns
-local_roots(ROOT=generational, N=3):   168.83ns
----
-local_roots(ROOT=local       , N=4):    43.93ns
-local_roots(ROOT=boxroot     , N=4):    39.30ns
-local_roots(ROOT=dll_boxroot , N=4):    76.50ns
-local_roots(ROOT=rem_boxroot , N=4):    53.42ns
-local_roots(ROOT=naive       , N=4):    52.33ns
-local_roots(ROOT=generational, N=4):   179.81ns
----
-local_roots(ROOT=local       , N=5):    57.20ns
-local_roots(ROOT=boxroot     , N=5):    45.76ns
-local_roots(ROOT=dll_boxroot , N=5):    91.09ns
-local_roots(ROOT=rem_boxroot , N=5):    63.95ns
-local_roots(ROOT=naive       , N=5):    65.62ns
-local_roots(ROOT=generational, N=5):   214.11ns
----
-local_roots(ROOT=local       , N=10):   113.09ns
-local_roots(ROOT=boxroot     , N=10):    99.51ns
-local_roots(ROOT=dll_boxroot , N=10):   157.87ns
-local_roots(ROOT=rem_boxroot , N=10):   116.69ns
-local_roots(ROOT=naive       , N=10):   126.17ns
-local_roots(ROOT=generational, N=10):   412.68ns
----
-local_roots(ROOT=local       , N=100):  1170.40ns
-local_roots(ROOT=boxroot     , N=100):   791.36ns
-local_roots(ROOT=dll_boxroot , N=100):  1533.67ns
-local_roots(ROOT=rem_boxroot , N=100):  1843.33ns
-local_roots(ROOT=naive       , N=100):  1206.28ns
-local_roots(ROOT=generational, N=100):  3672.42ns
----
-local_roots(ROOT=local       , N=1000): 12931.25ns
-local_roots(ROOT=boxroot     , N=1000):  7710.52ns
-local_roots(ROOT=dll_boxroot , N=1000): 14426.69ns
-local_roots(ROOT=rem_boxroot , N=1000): 10645.21ns
-local_roots(ROOT=naive       , N=1000): 13243.58ns
-local_roots(ROOT=generational, N=1000): 35637.49ns
----
 ```
 
-We see that, despite the up-front cost of wrapping the function,
-`boxroot`s are equivalent to or outperform OCaml's local roots. More
-precisely, `boxroots` are slightly more expensive than local roots by
-following the same callee-roots discipline, and the caller-roots
-discipline offers huge saves in this benchmark.
+![Local roots benchmarks](local.svg)
 
-(A high value of N is not only relevant for deep call chains, but also
-of functions containing many calls to functions manipulating ocaml
-values.)
+We see that, in this test, despite the up-front cost of wrapping the
+function, `boxroot`s are equivalent to or outperform OCaml's local
+roots. More precisely, `boxroots` are slightly more expensive than
+local roots when following the same callee-roots discipline, and the
+caller-roots discipline offers huge saves in this benchmark. The saves
+from the caller-roots discipline come from:
+- introducing fewer roots,
+- enabling recursion to be done via a tail call,
+- enabling better code generation after inlining.
 
-Our conclusions:
-- Using boxroots is competitive with local roots.
-- It could be beneficial in specific scenarios, for instance when
-  traversing large OCaml structures from a foreign language, with many
-  function calls.
+As this is dependent on programming style, the relative performance
+will vary depending on the test program. Our conclusions:
+- Using boxroots is roughly competitive with local roots.
+- It can be beneficial if one leverages the added flexibility of
+  boxroots.
+- It could be much more beneficial in specific scenarios, for instance
+  when traversing large OCaml structures from a foreign language, with
+  many function calls.
 
 Furthermore, we envision that with support from the OCaml compiler for
-the caller-roots discipline, the initial wrapping could be made
-unnecessary.
+the caller-roots discipline, the wrapping responsible for initial
+overhead could be made unnecessary.
 
 ## Implementation
 
