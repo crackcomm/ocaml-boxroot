@@ -98,30 +98,17 @@ value is registered as a GC root.
 This benchmark creates a lot of roots alive at the same time.
 
 ```
-$ make run-perm_count TEST_MORE=1
+$ make run-perm_count TEST_MORE=2
 Benchmark: perm_count
 ---
-gc: 2.10s            
-count: 3628800
----
-boxroot: 1.87s       
-count: 3628800
----
-ocaml: 2.05s         
-count: 3628800
----
-dll_boxroot: 2.08s   
-count: 3628800
----
-rem_boxroot: 1.96s   
-count: 3628800
----
-generational: 5.51s  
-count: 3628800
----
-global: 47.89s       
-count: 3628800
----
+boxroot: 1.88s
+gc: 2.17s
+ocaml: 1.79s
+generational: 5.72s
+ocaml_ref: 2.16s
+dll_boxroot: 2.15s
+rem_boxroot: 2.06s
+global: 47.29s
 ```
 
 We see that global roots add a large overhead, which is reduced by
@@ -154,23 +141,17 @@ are short-lived. Roots that survive are few, but they are very
 long-lived.
 
 ```
-$ make run-synthetic TEST_MORE=1
+$ make run-synthetic TEST_MORE=2
 Benchmark: synthetic
 ---
-gc: 7.02s            
----
-boxroot: 5.84s       
----
-ocaml: 7.02s         
----
-dll_boxroot: 6.33s   
----
-rem_boxroot: 5.99s   
----
-generational: 11.00s 
----
-global: 15.45s       
----
+boxroot: 5.89s
+gc: 6.61s
+ocaml: 5.97s
+generational: 10.44s
+ocaml_ref: 6.74s
+dll_boxroot: 6.42s
+rem_boxroot: 6.01s
+global: 15.20s
 ```
 
 Since the boxroot is directly inside a gc-allocated value, our
@@ -197,22 +178,17 @@ low GC work), so the cost of root handling is magnified, it
 would normally be amortized by OCaml computations.
 
 ```
-$ make run-globroots TEST_MORE=1
+$ make run-globroots TEST_MORE=2
+Benchmark: globroots
 ---
-gc: 1.45s            
----
-boxroot: 1.32s       
----
-ocaml: 1.35s         
----
-dll_boxroot: 1.29s   
----
-rem_boxroot: 1.29s   
----
-generational: 1.11s  
----
-global: 1.34s        
----
+boxroot: 1.09s
+gc: 1.38s
+ocaml: 1.08s
+generational: 1.14s
+ocaml_ref: 1.46s
+dll_boxroot: 1.09s
+rem_boxroot: 1.12s
+global: 1.40s
 ```
 
 In this benchmark, there are about 67000 minor collections and 40000
