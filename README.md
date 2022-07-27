@@ -71,14 +71,21 @@ single value with the same interface as boxroot (`create`, `get`,
 - `rem_boxroot`: a variant of `boxroot`, but using a different
   implementation using OCaml's remembered set.
 
-The various implementations (except the first one) have similar memory
-representation, some on the OCaml heap and some outside of the OCaml
-heap.
+The various implementations (except the `ocaml` one) have similar
+memory representation, some on the OCaml heap and some outside of the
+OCaml heap.
 
 By selecting different implementations of Ref, we can evaluate the
 overhead of root registration and scanning for various root
 implementations, compared to non-rooting OCaml and C implementations,
 along with other factors.
+
+We can expect _a priori_ that `ocaml` is always faster, since it has
+none of the overheads of other methods. This is meant as a baseline,
+but it also shows a limitation of our benchmarks: `boxroot` is
+intended for applications where values are _not_ easily reachable from
+the OCaml heap and thus none of `ocaml`, `ocaml_ref` and `gc` are
+available!
 
 ### Benchmark information
 
@@ -113,11 +120,22 @@ rem_boxroot: 2.06s
 global: 47.29s
 ```
 
+This benchmark allocates 1860 boxroot pools, and performs 1077 minor
+and 18 major collections. Roughly 20M boxroots are allocated.
+
 We see that global roots add a large overhead, which is reduced by
 using generational global roots. Boxroots outperform generational
 global roots, and are competitive with the reference implementations
 that do not use roots (ocaml and gc).
 
+It is not expected that `boxroot` outperforms `gc` and `ocaml_ref`.
+Two hypotheses can explain this speedup.
+- `boxroot` might puts less pressure on the GC. It indeed performs 14%
+  fewer minor collections than `gc`.
+- `boxroot` might improve cache locality during root scanning. The
+  sensitivity to this effect is confirmed by running the benchmark
+  with OCaml 4.14.0, which features data prefetching during major
+  collection (`gc`:1.45s vs. `boxroot`:1.82s).
 
 ### Synthetic benchmark
 
@@ -156,13 +174,15 @@ rem_boxroot: 6.01s
 global: 15.20s
 ```
 
-Since the boxroot is directly inside a gc-allocated value, our
-benchmarks leave few opportunities for the version using boxroots
-outperforming the versions without roots, so the repeatable
-outperformance of non-roots versions by the boxroot version in this
-benchmark is surprising. It could be explained by the greater cache
-locality of pools during scanning.
+This benchmark allocates 761 boxroot pools, and performs 2,634 minor
+and 128 major collections. Roughly 16M roots are allocated.
 
+`boxroot` again performs better than other root implementations, but
+it is unexpected again that it outperforms `ocaml`, `ocaml_ref` and
+`gc`. This is not well-understood.
+- `gc` actually does fewer minor and major collection.
+- Running with a prefetching GC (OCaml 4.14) still shows comparable
+  performance between `boxroot` and `ocaml`.
 
 ### Globroot benchmark
 
@@ -170,37 +190,38 @@ This benchmark is adapted from the OCaml testsuite. It exercises the
 case where there are about 1024 concurrently-live roots, but only a
 couple of young roots are created between two minor collections.
 
-This benchmark tests the case where there are few
-concurrently-live roots and little root creation and
-modification between two collections. This corresponds to
-a common scenario where the FFI is rarely used, except that
-this benchmark does not perform any OCaml computations or
-allocations (it forces collections to occur very often despite
-low GC work), so the cost of root handling is magnified, it
-would normally be amortized by OCaml computations.
+This benchmark tests the case where there are few concurrently-live
+roots and little root creation and modification between two
+collections. This benchmark does not perform any OCaml computations or
+allocations (it forces collections to occur very often despite low GC
+work). So the cost of root handling is magnified, it would normally be
+amortized by OCaml computations.
 
 ```
 $ make run-globroots TEST_MORE=2
 Benchmark: globroots
 ---
-boxroot: 1.09s
-gc: 1.38s
-ocaml: 1.08s
+boxroot: 1.08s
+gc: 1.40s
+ocaml: 0.93s
 generational: 1.14s
-ocaml_ref: 1.46s
-dll_boxroot: 1.09s
-rem_boxroot: 1.12s
-global: 1.40s
+ocaml_ref: 1.31s
+dll_boxroot: 1.06s
+rem_boxroot: 1.00s
+global: 1.30s
 ```
 
 In this benchmark, there are about 67000 minor collections and 40000
-major collections. List-based and remembered-set-based implementations
-are expected to perform well, whereas `boxroot` has to scan on the
-order of a full memory pool at every minor collection even if there
-are only a few young roots, for a pool size currently chosen large
-(16KB). This overhead would have been noticeable in this benchmark,
-but it has been reduced thanks to an optimisation brought to scanning
-during minor collection.
+major collections. 217k boxroots are allocated.
+
+Since there are few root creations between collections, list-based and
+remembered-set-based implementations are expected to perform well
+(their scanning is quick). On the other hand, `boxroot` has to scan on
+the order of a full memory pool at every minor collection even if
+there are only a few young roots, for a pool size chosen large (16KB).
+There used to be a noticeable overhead in this benchmark, but it has
+been reduced with optimizations brought to scanning during minor
+collection.
 
 ![Global roots benchmarks](global.svg)
 
@@ -209,10 +230,11 @@ during minor collection.
 We designed this benchmark to test the idea of replacing local
 roots altogether by boxroots.
 
-Currently, OCaml FFI code uses a "callee-roots" discipline
-where each function has to locally "root" each OCaml value
-received as argument or used as a temporary paramter, using
-the efficient `CAMLparam`, `CAMLlocal`, `CAMLreturn` macros.
+Currently, OCaml FFI code uses a "callee-roots" discipline where each
+function has to locally "root" each OCaml value received as argument
+or used as a temporary paramter, using the efficient `CAMLparam`,
+`CAMLlocal`, `CAMLreturn` macros. These macros manage a shadow stack
+containing pointers to the live roots.
 
 Boxroots suggest a "caller-root" approach where callers would
 package their OCaml values in boxroots, whose ownership is
@@ -288,7 +310,7 @@ expected by OCaml `external` declarations to a caller-root convention.
 The `naive` test uses boxroots in a callee-roots discipline.
 
 ```
-Benchmark: local_roots
+$ make run-local_roots TEST_MORE=2
 ```
 
 ![Local roots benchmarks](local.svg)
@@ -303,14 +325,19 @@ from the caller-roots discipline come from:
 - enabling recursion to be done via a tail call,
 - enabling better code generation after inlining.
 
-As this is dependent on programming style, the relative performance
-will vary depending on the test program. Our conclusions:
-- Using boxroots is roughly competitive with local roots.
+The results greatly depends on the test program and programming style.
+For instance we did not take into account local roots optimisations
+that fall outside of the documented syntactic rules and rely on expert
+knowledge of their implementation, since one of our goal is to propose
+an interface that can easily be made safe in Rust.
+
+Our conclusions:
+- Using boxroots is competitive with local roots.
 - It can be beneficial if one leverages the added flexibility of
   boxroots.
-- It could be much more beneficial in specific scenarios, for instance
-  when traversing large OCaml structures from a foreign language, with
-  many function calls.
+- There could be specific scenarios where it is much more beneficial,
+  for instance when traversing large OCaml structures from a foreign
+  language, with many function calls.
 
 Furthermore, we envision that with support from the OCaml compiler for
 the caller-roots discipline, the wrapping responsible for initial
@@ -319,13 +346,13 @@ overhead could be made unnecessary.
 ## Implementation
 
 We implemented a custom allocator that manages fairly standard
-freelist-based memory pools, but we make arrangements such that we can
-scan these pools efficiently. In standard fashion, the pools are
-aligned in such a way that the most significant bits can be used to
-identify the pool from the address of their members. Since elements of
-the freelist are guaranteed to point only inside the memory pool, and
-non-immediate OCaml values are guaranteed to point only outside of the
-memory pool, we can identify allocated slots as follows:
+freelist-based memory pools, but we arrange to scan these pools
+efficiently. In standard fashion, the pools are aligned in such a way
+that the most significant bits can be used to identify the pool from
+the address of their members. Since elements of the freelist are
+guaranteed to point only inside the memory pool, and non-immediate
+OCaml values are guaranteed to point only outside of the memory pool,
+we can identify allocated slots as follows:
 
 ```
 allocated(slot, pool) ≝ (pool != (slot & ~(1<<N - 2)))
@@ -333,7 +360,7 @@ allocated(slot, pool) ≝ (pool != (slot & ~(1<<N - 2)))
 
 N is a parameter determining the size of the pools. The bitmask is
 chosen to preserve the least significant bit, so that immediate OCaml
-values (with lsb set) are correctly classified.
+values (those with lsb set) are correctly classified.
 
 Scanning is set up by registering a root-scanning hook with the OCaml
 GC, and done by traversing the pools linearly. An early-exit
