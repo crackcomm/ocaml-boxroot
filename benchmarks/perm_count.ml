@@ -48,7 +48,8 @@ let () =
   Printf.printf "%s: %!" Ref.Config.implem_name;
   let count = count_permutations n in
   Printf.printf "%.2fs\n%!" (Sys.time ());
-  Printf.printf "count: %Ld\n%!" count;
+  (* Printf.printf "count: %Ld\n%!" count; *)
+  ignore (Sys.opaque_identity count);
   if Ref.Config.show_stats then
     Ref.Config.Ref.print_stats ();
   Ref.Config.Ref.teardown ();

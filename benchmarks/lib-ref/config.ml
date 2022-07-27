@@ -32,7 +32,8 @@ let implementations : (string * (module Ref)) list = [
   "dll_boxroot", (module Dll_boxroot_ref);
   "rem_boxroot", (module Rem_boxroot_ref);
   "gc", (module Gc_ref);
-  "ocaml", (module Ocaml_ref);
+  "ocaml_ref", (module Ocaml_ref);
+  "ocaml", (module Ocaml);
 ]
 
 let implem_name, implem_module =

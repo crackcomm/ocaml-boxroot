@@ -9,12 +9,10 @@ static int MY(compare_refs)(value const *x, value const *y)
   return Double_val(*x) == Double_val(*y);
 }
 
-MY(root) MY(root_fixpoint_rooted)(MY(root) f, MY(root) x)
+MY(root) MY(root_fixpoint_rooted)(value const *f, MY(root) x)
 {
-  MY(root) y = MY(root_create)(caml_callback(MY(root_get)(f),
-                                             MY(root_get)(x)));
+  MY(root) y = MY(root_create)(caml_callback(*f, MY(root_get)(x)));
   if (MY(compare_refs)(MY(root_get_ref)(x), MY(root_get_ref)(y))) {
-    MY(root_delete)(f);
     MY(root_delete)(x);
     return y;
   } else {
@@ -25,10 +23,12 @@ MY(root) MY(root_fixpoint_rooted)(MY(root) f, MY(root) x)
 
 value MY(root_fixpoint)(value f, value x)
 {
-  MY(root) y = MY(root_fixpoint_rooted)(MY(root_create)(f),
-                                       MY(root_create)(x));
+  MY(root) f_root = MY(root_create)(f);
+  MY(root) y = MY(root_fixpoint_rooted)(MY(root_get_ref)(f_root),
+                                        MY(root_create)(x));
   value v = MY(root_get)(y);
   MY(root_delete)(y);
+  MY(root_delete)(f_root);
   return v;
 }
 
@@ -38,6 +38,10 @@ value MY(root_fixpoint)(value f, value x)
 value MY(root_setup_caml)(value unit)
 {
   if (!MY(root_setup)()) caml_failwith("root_setup_caml");
+  /* We do not want to measure the overhead of reaching a deallocation
+     threshold repeatedly. For this we preallocate an root which will
+     never be deallocated. */
+  MY(root_create)(Val_unit);
   return unit;
 }
 

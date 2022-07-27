@@ -48,31 +48,37 @@ benchmarks.
 
 ### Implementations
 
-The benchmarks compares various implementation of an OCaml reference
-type Ref containing a single value with an imperative interface
-(`create`, `get`, `delete`, `modify`):
+The benchmarks compares various implementation of a cell containing a
+single value with the same interface as boxroot (`create`, `get`,
+`delete`, `modify`):
 
-- `ocaml`: an OCaml implementation using a mutable record, with
+- `ocaml`: a pure OCaml implementation where `create` is the identity
+  and nothing happens on deletion.
+- `ocaml_ref`: a pure OCaml implementation using a mutable record, with
   deletion implemented by assigning `()` using Obj.magic.
-- `gc`: a C implementation of the previous using
+- `gc`: a C implementation of the previous, using
   `caml_alloc_small(1,0)`,
 - `boxroot`: a `boxroot` disguised as an immediate (reference
   implementation described further below),
+- `naive`: like `boxroot`, but without taking advantage of the full
+  expressiveness of boxroot (for the local roots benchmark below)
 - `global`: a block allocated outside the OCaml heap (disguised as an
   immediate) containing a global root, and
 - `generational`: idem, but using a generational
   global root.
-- `dll_boxroot`: a variant of `boxroot`, but using a "naive"
+- `dll_boxroot`: a variant of `boxroot`, but using a simpler
   implementation with doubly-linked lists,
-- `rem_boxroot`: a variant of `boxroot`, but using a simpler
+- `rem_boxroot`: a variant of `boxroot`, but using a different
   implementation using OCaml's remembered set.
 
-The various implementations have similar memory representation, some
-on the OCaml heap and some outside of the OCaml heap.
+The various implementations (except the first one) have similar memory
+representation, some on the OCaml heap and some outside of the OCaml
+heap.
 
 By selecting different implementations of Ref, we can evaluate the
 overhead of root registration and scanning for various root
-implementations, compared to non-rooting OCaml and C implementations.
+implementations, compared to non-rooting OCaml and C implementations,
+along with other factors.
 
 ### Benchmark information
 
@@ -94,30 +100,17 @@ value is registered as a GC root.
 This benchmark creates a lot of roots alive at the same time.
 
 ```
-$ make run-perm_count TEST_MORE=1
+$ make run-perm_count TEST_MORE=2
 Benchmark: perm_count
 ---
-gc: 2.10s            
-count: 3628800
----
-boxroot: 1.87s       
-count: 3628800
----
-ocaml: 2.05s         
-count: 3628800
----
-dll_boxroot: 2.08s   
-count: 3628800
----
-rem_boxroot: 1.96s   
-count: 3628800
----
-generational: 5.51s  
-count: 3628800
----
-global: 47.89s       
-count: 3628800
----
+boxroot: 1.88s
+gc: 2.17s
+ocaml: 1.79s
+generational: 5.72s
+ocaml_ref: 2.16s
+dll_boxroot: 2.15s
+rem_boxroot: 2.06s
+global: 47.29s
 ```
 
 We see that global roots add a large overhead, which is reduced by
@@ -150,23 +143,17 @@ are short-lived. Roots that survive are few, but they are very
 long-lived.
 
 ```
-$ make run-synthetic TEST_MORE=1
+$ make run-synthetic TEST_MORE=2
 Benchmark: synthetic
 ---
-gc: 7.02s            
----
-boxroot: 5.84s       
----
-ocaml: 7.02s         
----
-dll_boxroot: 6.33s   
----
-rem_boxroot: 5.99s   
----
-generational: 11.00s 
----
-global: 15.45s       
----
+boxroot: 5.89s
+gc: 6.61s
+ocaml: 5.97s
+generational: 10.44s
+ocaml_ref: 6.74s
+dll_boxroot: 6.42s
+rem_boxroot: 6.01s
+global: 15.20s
 ```
 
 Since the boxroot is directly inside a gc-allocated value, our
@@ -193,22 +180,17 @@ low GC work), so the cost of root handling is magnified, it
 would normally be amortized by OCaml computations.
 
 ```
-$ make run-globroots TEST_MORE=1
+$ make run-globroots TEST_MORE=2
+Benchmark: globroots
 ---
-gc: 1.45s            
----
-boxroot: 1.32s       
----
-ocaml: 1.35s         
----
-dll_boxroot: 1.29s   
----
-rem_boxroot: 1.29s   
----
-generational: 1.11s  
----
-global: 1.34s        
----
+boxroot: 1.09s
+gc: 1.38s
+ocaml: 1.08s
+generational: 1.14s
+ocaml_ref: 1.46s
+dll_boxroot: 1.09s
+rem_boxroot: 1.12s
+global: 1.40s
 ```
 
 In this benchmark, there are about 67000 minor collections and 40000
@@ -219,6 +201,8 @@ are only a few young roots, for a pool size currently chosen large
 (16KB). This overhead would have been noticeable in this benchmark,
 but it has been reduced thanks to an optimisation brought to scanning
 during minor collection.
+
+![Global roots benchmarks](global.svg)
 
 ### Local roots benchmark
 
@@ -235,8 +219,8 @@ package their OCaml values in boxroots, whose ownership is
 passed to the callee. Creating boxroots is slower than
 registering local roots, but the caller-root discipline can
 avoid re-rooting each value when moving up and down the call
-chain, so it should have a performance advantage for deep call
-chains.
+chain, so it is expected to have a performance advantage for
+deep call chains.
 
 This benchmark performs a (recursive) fixpoint computation on
 OCaml floating-point value from C, with a parameter N that
@@ -305,84 +289,32 @@ The `naive` test uses boxroots in a callee-roots discipline.
 
 ```
 Benchmark: local_roots
----
-local_roots(ROOT=local       , N=1):    12.51ns
-local_roots(ROOT=boxroot     , N=1):    13.90ns
-local_roots(ROOT=dll_boxroot , N=1):    30.16ns
-local_roots(ROOT=rem_boxroot , N=1):    22.40ns
-local_roots(ROOT=naive       , N=1):    20.87ns
-local_roots(ROOT=generational, N=1):    50.76ns
----
-local_roots(ROOT=local       , N=2):    23.47ns
-local_roots(ROOT=boxroot     , N=2):    22.54ns
-local_roots(ROOT=dll_boxroot , N=2):    48.88ns
-local_roots(ROOT=rem_boxroot , N=2):    33.19ns
-local_roots(ROOT=naive       , N=2):    32.75ns
-local_roots(ROOT=generational, N=2):    99.74ns
----
-local_roots(ROOT=local       , N=3):    34.40ns
-local_roots(ROOT=boxroot     , N=3):    30.75ns
-local_roots(ROOT=dll_boxroot , N=3):    58.05ns
-local_roots(ROOT=rem_boxroot , N=3):    43.53ns
-local_roots(ROOT=naive       , N=3):    44.02ns
-local_roots(ROOT=generational, N=3):   168.83ns
----
-local_roots(ROOT=local       , N=4):    43.93ns
-local_roots(ROOT=boxroot     , N=4):    39.30ns
-local_roots(ROOT=dll_boxroot , N=4):    76.50ns
-local_roots(ROOT=rem_boxroot , N=4):    53.42ns
-local_roots(ROOT=naive       , N=4):    52.33ns
-local_roots(ROOT=generational, N=4):   179.81ns
----
-local_roots(ROOT=local       , N=5):    57.20ns
-local_roots(ROOT=boxroot     , N=5):    45.76ns
-local_roots(ROOT=dll_boxroot , N=5):    91.09ns
-local_roots(ROOT=rem_boxroot , N=5):    63.95ns
-local_roots(ROOT=naive       , N=5):    65.62ns
-local_roots(ROOT=generational, N=5):   214.11ns
----
-local_roots(ROOT=local       , N=10):   113.09ns
-local_roots(ROOT=boxroot     , N=10):    99.51ns
-local_roots(ROOT=dll_boxroot , N=10):   157.87ns
-local_roots(ROOT=rem_boxroot , N=10):   116.69ns
-local_roots(ROOT=naive       , N=10):   126.17ns
-local_roots(ROOT=generational, N=10):   412.68ns
----
-local_roots(ROOT=local       , N=100):  1170.40ns
-local_roots(ROOT=boxroot     , N=100):   791.36ns
-local_roots(ROOT=dll_boxroot , N=100):  1533.67ns
-local_roots(ROOT=rem_boxroot , N=100):  1843.33ns
-local_roots(ROOT=naive       , N=100):  1206.28ns
-local_roots(ROOT=generational, N=100):  3672.42ns
----
-local_roots(ROOT=local       , N=1000): 12931.25ns
-local_roots(ROOT=boxroot     , N=1000):  7710.52ns
-local_roots(ROOT=dll_boxroot , N=1000): 14426.69ns
-local_roots(ROOT=rem_boxroot , N=1000): 10645.21ns
-local_roots(ROOT=naive       , N=1000): 13243.58ns
-local_roots(ROOT=generational, N=1000): 35637.49ns
----
 ```
 
-We see that, despite the up-front cost of wrapping the function,
-`boxroot`s are equivalent to or outperform OCaml's local roots. More
-precisely, `boxroots` are slightly more expensive than local roots by
-following the same callee-roots discipline, and the caller-roots
-discipline offers huge saves in this benchmark.
+![Local roots benchmarks](local.svg)
 
-(A high value of N is not only relevant for deep call chains, but also
-of functions containing many calls to functions manipulating ocaml
-values.)
+We see that, in this test, despite the up-front cost of wrapping the
+function, `boxroot`s are equivalent to or outperform OCaml's local
+roots. More precisely, `boxroots` are slightly more expensive than
+local roots when following the same callee-roots discipline, and the
+caller-roots discipline offers huge saves in this benchmark. The saves
+from the caller-roots discipline come from:
+- introducing fewer roots,
+- enabling recursion to be done via a tail call,
+- enabling better code generation after inlining.
 
-Our conclusions:
-- Using boxroots is competitive with local roots.
-- It could be beneficial in specific scenarios, for instance when
-  traversing large OCaml structures from a foreign language, with many
-  function calls.
+As this is dependent on programming style, the relative performance
+will vary depending on the test program. Our conclusions:
+- Using boxroots is roughly competitive with local roots.
+- It can be beneficial if one leverages the added flexibility of
+  boxroots.
+- It could be much more beneficial in specific scenarios, for instance
+  when traversing large OCaml structures from a foreign language, with
+  many function calls.
 
 Furthermore, we envision that with support from the OCaml compiler for
-the caller-roots discipline, the initial wrapping could be made
-unnecessary.
+the caller-roots discipline, the wrapping responsible for initial
+overhead could be made unnecessary.
 
 ## Implementation
 
@@ -403,25 +335,26 @@ N is a parameter determining the size of the pools. The bitmask is
 chosen to preserve the least significant bit, so that immediate OCaml
 values (with lsb set) are correctly classified.
 
-Scanning is set up by registering a root scanning hook with the OCaml
+Scanning is set up by registering a root-scanning hook with the OCaml
 GC, and done by traversing the pools linearly. An early-exit
 optimisation when all roots have been found ensures that programs that
 use few roots throughout the life of the program only pay for what
 they use.
 
 The memory pools are managed in several rings, according to their
-*class*. The class class distinguishes pools according to OCaml
-generations, as well as pools that are free (which need not be
-scanned). A pool is *young* if it is allowed to contain pointers to
-the minor heap. During minor collection, we only need to scan young
-pools. At the end of the minor collection, the young pools, now
-guaranteed to no longer point to any young value, are promoted into
-*old* pools.
+*class*. The class distinguishes pools according to OCaml generations,
+as well as pools that are free (which need not be scanned). A pool is
+*young* if it is allowed to contain pointers to the minor heap. During
+minor collection, we only need to scan young pools. At the end of the
+minor collection, the young pools, now guaranteed to no longer point
+to any young value, are promoted into *old* pools. We unconditionally
+allocate roots in young pools, to avoids testing at allocation-time
+whether their initial value is young or old.
 
 The rings are managed in such a manner that pools that are less than
 half-full are rotated to the start of the ring. This ensures that it
 is easy to find a pool for allocation. When the current pool is full,
-if no young pool is available, then we demote the first old pool into
+if no young pool is available then we demote the first old pool into
 a young pool, if it is less than half-full. (This pool contains major
 roots, but it is harmless to scan them during minor collection.)
 Otherwise we prefer to allocate a new pool.
@@ -441,4 +374,5 @@ pay any of the cost.
 
 * Due to limitations of the GC hook interface, no work has been done
   to scan roots incrementally. Holding a (very!) large number of roots
-  at the same time can negatively affect latency.
+  at the same time can negatively affect latency at the beginning of
+  major GC cycles.

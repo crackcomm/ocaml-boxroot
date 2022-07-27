@@ -116,3 +116,31 @@ static void generational_root_print_stats() { }
 
 #include "local_roots_gen_boxroot.h"
 #undef MY_PREFIX
+
+#define MY_PREFIX global_
+
+typedef value * global_root;
+
+static inline value global_root_get(global_root b) { return *b; }
+static inline value const * global_root_get_ref (global_root b) { return b; }
+
+static inline global_root global_root_create(value v)
+{
+  value *b = malloc(sizeof(value));
+  *b = v;
+  caml_register_global_root(b);
+  return b;
+}
+
+static inline void global_root_delete(generational_root b)
+{
+  caml_remove_global_root(b);
+  free(b);
+}
+
+static int global_root_setup() { return 1; }
+static void global_root_teardown() { }
+static void global_root_print_stats() { }
+
+#include "local_roots_gen_boxroot.h"
+#undef MY_PREFIX

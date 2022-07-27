@@ -11,7 +11,7 @@ entry:
 	@echo "make test: test boxroots on 'perm_count' and test ocaml-boxroot-sys"
 	@echo "make clean"
 	@echo
-	@echo "Note: for each benchmark-running target you can set TEST_MORE=1"
+	@echo "Note: for each benchmark-running target you can set TEST_MORE={1,2}"
 	@echo "to enable some less-important benchmarks that are disabled by default"
 	@echo "  make run-globroots TEST_MORE=1"
 	@echo "other options: ENABLE_BOXROOT_MUTEX=1 BOXROOT_DEBUG=1"
@@ -26,22 +26,31 @@ clean:
 
 EMPTY=
 REF_IMPLS=\
-  gc \
   boxroot \
+  gc \
   $(EMPTY)
 REF_IMPLS_MORE=\
   ocaml \
+  generational \
+  $(EMPTY)
+REF_IMPLS_MORE_MORE=\
+  ocaml_ref \
   dll_boxroot \
   rem_boxroot \
-  generational \
   global \
   $(EMPTY)
+
+ifeq ($(TEST_MORE),2)
+TEST_MORE_MORE=1
+endif
+
 
 run_bench = \
   echo "Benchmark: $(1)" \
   && echo "---" \
-  $(foreach REF, $(REF_IMPLS) $(if $(TEST_MORE),$(REF_IMPLS_MORE),), \
-    && (REF=$(REF) $(2); echo "---") \
+  $(foreach REF, $(REF_IMPLS) $(if $(TEST_MORE),$(REF_IMPLS_MORE),) \
+	               $(if $(TEST_MORE_MORE),$(REF_IMPLS_MORE_MORE),), \
+    && (REF=$(REF) $(2)) \
   )
 
 .PHONY: run-perm_count
@@ -66,10 +75,7 @@ run-synthetic: all
 
 .PHONY: run-globroots
 run-globroots: all
-	$(MAKE) run-globroots-all TEST_MORE=1
-# Globroots has the unusual behavior that global-root implementations
-# are fast, faster than boxroot. We always want to  see their results,
-# so we add an indirection to set TEST_MORE=1.
+	$(MAKE) run-globroots-all
 
 .PHONY: run-globroots-all
 run-globroots-all: all
@@ -80,8 +86,10 @@ run-globroots-all: all
 run-local_roots: all
 	echo "Benchmark: local_roots" \
 	&& echo "---" \
-	$(foreach N, 1 2 $(if $(TEST_MORE),3 4,) 5 $(if $(TEST_MORE),8,) 10 $(if $(TEST_MORE),30,) 100 $(if $(TEST_MORE),300,) 1000, \
-	  $(foreach ROOT, local boxroot $(if $(TEST_MORE), dll_boxroot rem_boxroot naive generational,), \
+	$(foreach N, 1 2 $(if $(TEST_MORE),3 4,) 5 $(if $(TEST_MORE),8,) 10 \
+		           $(if $(TEST_MORE),30,) 100 $(if $(TEST_MORE),300,) 1000, \
+	  $(foreach ROOT, boxroot local $(if $(TEST_MORE), ocaml generational naive) \
+                    $(if $(TEST_MORE_MORE), ocaml_ref dll_boxroot rem_boxroot global), \
 	    && (N=$(N) ROOT=$(ROOT) dune exec ./benchmarks/local_roots.exe) \
 	  ) && echo "---")
 
