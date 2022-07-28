@@ -51,7 +51,8 @@ run_bench = \
   $(foreach REF, $(REF_IMPLS) $(if $(TEST_MORE),$(REF_IMPLS_MORE),) \
 	               $(if $(TEST_MORE_MORE),$(REF_IMPLS_MORE_MORE),), \
     && (REF=$(REF) $(2)) \
-  )
+  ) \
+	&& echo "---"
 
 .PHONY: run-perm_count
 run-perm_count: all

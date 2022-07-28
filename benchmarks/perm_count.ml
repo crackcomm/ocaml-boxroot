@@ -44,12 +44,14 @@ let n =
   with _ ->
     Printf.ksprintf failwith "We expected an environment variable N with an integer value."
 
+let rec fact n = if n = 0 then 1L else Int64.(mul (of_int n) (fact (n - 1)))
+
 let () =
   Ref.Config.Ref.setup ();
   Printf.printf "%s: %!" Ref.Config.implem_name;
   let count = count_permutations n in
   Printf.printf "%.2fs\n%!" (Sys.time ());
-  (* Printf.printf "count: %Ld\n%!" count; *)
+  assert (count = fact n);
   ignore (Sys.opaque_identity count);
   if Ref.Config.show_stats then
     Ref.Config.Ref.print_stats ();
