@@ -1,3 +1,4 @@
+(* SPDX-License-Identifier: MIT *)
 type 'a t
 external create : 'a -> 'a t         = "dll_boxroot_ref_create"
 external get : 'a t -> 'a            = "dll_boxroot_ref_get" [@@noalloc]

@@ -1,3 +1,4 @@
+(* SPDX-License-Identifier: MIT *)
 type 'a t = { mutable contents: 'a }
 
 (* Creating the record on the OCaml side could be incorrect with

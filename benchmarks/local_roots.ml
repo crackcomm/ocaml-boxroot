@@ -1,3 +1,4 @@
+(* SPDX-License-Identifier: MIT *)
 type impl = {
   fixpoint: (float -> float) -> float -> float;
   setup: unit -> unit;

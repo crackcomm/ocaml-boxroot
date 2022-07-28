@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT */
 // Definitions to be able to build boxroot without an OCaml install
 
 typedef long value;

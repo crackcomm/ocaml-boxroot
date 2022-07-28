@@ -1,3 +1,4 @@
+(* SPDX-License-Identifier: MIT *)
 module Ref = Ref.Config.Ref
 
 type 'a mlist = | Nil | Cons of { hd : 'a; mutable tl: 'a mlist }

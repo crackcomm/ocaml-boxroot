@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT */
 #define CONCAT(g,f) g ## f
 #define MY2(g,f) CONCAT(g,f)
 #define MY(f) MY2(MY_PREFIX, f)

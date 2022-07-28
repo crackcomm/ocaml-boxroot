@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT */
 #ifndef OCAML_HOOKS_H
 #define OCAML_HOOKS_H
 

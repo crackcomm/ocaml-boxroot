@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT */
 fn build_boxroot(ocaml_path: &str) {
     let mut config = cc::Build::new();
 

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT */
 #define CAML_NAME_SPACE
 #define CAML_INTERNALS
 

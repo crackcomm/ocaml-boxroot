@@ -6,6 +6,9 @@ Working version
 - Add support for OCaml 5.0 (multicore).
   (Guillaume Munch-Maccagnoni, review by Gabriel Scherer)
 
+- Clarify license (MIT license).
+  (Guillaume Munch-Maccagnoni)
+
 ### Internal changes
 
 - Benchmark improvements.
@@ -60,8 +63,7 @@ ocaml-boxroot 0.1
 =================
 
 - First numbered prototype & experimentation.
-  (Bruno Deferrari, Guillaume Munch-Maccagnoni, Gabriel Scherer
-   and Jacques-Henri Jourdan)
+  (Bruno Deferrari, Guillaume Munch-Maccagnoni, Gabriel Scherer)
 
 ### Packaging
 

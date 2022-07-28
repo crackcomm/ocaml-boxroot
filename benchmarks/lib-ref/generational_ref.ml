@@ -1,3 +1,4 @@
+(* SPDX-License-Identifier: MIT *)
 type 'a t
 external create : 'a -> 'a t         = "generational_ref_create"
 external get : 'a t -> 'a            = "generational_ref_get"

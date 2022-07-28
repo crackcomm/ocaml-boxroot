@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT */
 #ifndef BOXROOT_PLATFORM_H
 #define BOXROOT_PLATFORM_H
 

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT */
 #define CAML_INTERNALS
 
 #include "platform.h"

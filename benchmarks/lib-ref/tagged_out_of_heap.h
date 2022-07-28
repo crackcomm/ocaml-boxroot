@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT */
 #ifndef ABSTRACT_OUT_OF_HEAP_H
 
 #include "caml/mlvalues.h"

@@ -1,3 +1,4 @@
+(* SPDX-License-Identifier: MIT *)
 (* This benchmark is a direct port of gc-roots/globroots.ml from the OCaml testsuite
      https://github.com/ocaml/ocaml/blob/trunk/testsuite/tests/gc-roots/globroots.ml
 

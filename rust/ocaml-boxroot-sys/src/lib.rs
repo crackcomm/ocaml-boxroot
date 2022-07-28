@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT */
 pub type Value = isize;
 pub type BoxRoot = *const Value;
 
