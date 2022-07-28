@@ -5,24 +5,39 @@ stages:
   - .pre
   - build
 
-setup-5.1:
+setup-5.0:
   stage: .pre
-  artifacts:
+  # The OCaml 5 installation is updated when clearing runner caches 
+  cache:
+    key: ocaml-5.0.0+trunk
     paths:
-        # Note: once the stable 5.0 is released, this can be converted into a cached dir
       - _opam
   script:
     - export OPAMCLI=2.0
+    - if [ -d _opam ]; then { echo "_opam already exists, caching successful"; exit 0; } fi
     - opam repository add beta git+https://github.com/ocaml/ocaml-beta-repository.git
-    - opam switch create . --packages=ocaml-variants.5.1.0+trunk,dune --repos beta,default --yes
+    - opam switch create . --packages=ocaml-variants.5.0.0+trunk,dune --repos beta,default --yes
     - opam clean --switch=.
+
+.opam-switch-to-5: &opam-switch-to-5
+  - echo "Testing with OCaml 5.0"
+    # check we have OCaml 5.0.0+trunk
+  - opam env --switch=.
+    # switch to OCaml 5.0.0+trunk
+  - eval $(opam env --switch=. --set-switch)
+  - ocamlc --version
 
 build:
   stage: build
+  cache:
+    key: ocaml-5.0.0+trunk
+    paths:
+      - _opam
+    policy: pull
   artifacts:
     paths:
       - bench-log-4.14.txt
-      - bench-log-5.1.txt
+      - bench-log-5.0.txt
   before_script:
     - export OPAMCLI=2.0
     - opam install --switch=4.14 --yes dune
@@ -32,17 +47,17 @@ build:
     - make all
     - make run | tee bench-log-4.14.txt
     - make clean
-    - echo "Testing Boxroot with OCaml 5.1"
-      # check we have OCaml 5.1.0+trunk
-    - opam env --switch=.
-      # switch to OCaml 5.1.0+trunk
-    - eval $(opam env --switch=. --set-switch)
-    - ocamlc --version
+    - *opam-switch-to-5
     - make all
-    - make run | tee bench-log-5.1.txt
+    - make run | tee bench-log-5.0.txt
 
 build-crate:
   stage: build
+  cache:
+    key: ocaml-5.0.0+trunk
+    paths:
+      - _opam
+    policy: pull
   before_script:
     - export OPAMCLI=2.0
     - sudo apk add --no-cache rust cargo ca-certificates
@@ -51,10 +66,5 @@ build-crate:
     - ocamlc --version
     - make test-rs
     - make clean-rs
-    - echo "Testing Rust crate with OCaml 5.1"
-      # check we have OCaml 5.1.0+trunk
-    - opam env --switch=.
-      # switch to OCaml 5.1.0+trunk
-    - eval $(opam env --switch=. --set-switch)
-    - ocamlc --version
+    - *opam-switch-to-5
     - make test-rs
