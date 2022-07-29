@@ -587,7 +587,7 @@ void boxroot_delete_slow(boxroot root)
   /* recomputing these avoids spilling in boxroot_delete */
   pool *p = get_pool_header((slot)root);
   int dom_id = dom_id_of_pool(p);
-  int local = boxroot_domain_lock_held(dom_id);
+  int local = !BOXROOT_FORCE_REMOTE && boxroot_domain_lock_held(dom_id);
   if (local) {
     /* deallocation already done, but we passed a deallocation
        threshold */

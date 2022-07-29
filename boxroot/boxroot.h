@@ -90,6 +90,9 @@ boxroot boxroot_create_slow(value v);
 /* Test the overheads of multithreading (systhreads and multicore).
    Purely for experimental purposes. Otherwise should always be 1. */
 #define BOXROOT_MULTITHREAD 1
+/* Make every deallocation a remote deallocation. For testing purposes
+   only. Otherwise should always be 0. */
+#define BOXROOT_FORCE_REMOTE 0
 
 inline boxroot boxroot_create(value init)
 {
@@ -150,8 +153,10 @@ inline void boxroot_delete(boxroot root)
 #endif
   boxroot_fl *fl = Get_pool_header(root);
   int dom_id = dom_id_of_fl(fl);
-  if ((BOXROOT_MULTITHREAD && !boxroot_domain_lock_held(dom_id))
-      || BOXROOT_UNLIKELY(boxroot_free_slot(fl, root)))
+  int remote =
+    BOXROOT_FORCE_REMOTE
+    || (BOXROOT_MULTITHREAD && !boxroot_domain_lock_held(dom_id));
+  if (remote || BOXROOT_UNLIKELY(boxroot_free_slot(fl, root)))
     boxroot_delete_slow(root);
 }
 
