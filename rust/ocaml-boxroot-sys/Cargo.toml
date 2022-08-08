@@ -17,6 +17,7 @@ include = ["build.rs",
            "vendor/README.md",
            "vendor/Changes.md",
            "README.md"]
+links = "ocaml-boxroot"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
