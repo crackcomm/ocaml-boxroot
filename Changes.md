@@ -37,6 +37,12 @@ Working version
 - Minor improvements.
   (Guillaume Munch-Maccagnoni)
 
+- Remove `without-ocamlopt` feature flag from the Rust crate and add
+  `bundle-boxroot`.
+  (Bruno Deferrari)
+
+- Declare `package.links` value in Rust crate.
+
 
 ocaml-boxroot 0.2
 =================

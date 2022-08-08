@@ -14,3 +14,14 @@ package `ocaml-interop`).
 The `link-ocaml-runtime-and-dummy-program` feature needs to be enabled when running tests:
 
     cargo test --features "link-ocaml-runtime-and-dummy-program"
+
+## Feature flags
+
+### `bundle-boxroot`
+
+If this feature flag is not enabled (by default it is enabled), the
+compilation of the C code that implements boxroot will be skipped,
+and the user is responsible of linking boxroot into the final binary.
+
+When this feature flag is enabled, the OCaml headers must be available
+to be able to compile the boxroot C code.

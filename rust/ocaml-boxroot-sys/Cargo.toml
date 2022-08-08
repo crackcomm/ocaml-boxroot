@@ -16,13 +16,13 @@ include = ["build.rs",
            "vendor/boxroot/*.h",
            "vendor/README.md",
            "vendor/Changes.md",
-           "README.md",
-           "utils/without-ocamlopt/caml/*.h"]
+           "README.md"]
+links = "ocaml-boxroot"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [package.metadata.docs.rs]
-features = [ "without-ocamlopt" ]
+features = []
 
 [dependencies]
 
@@ -30,5 +30,6 @@ features = [ "without-ocamlopt" ]
 cc = { version = "^1.0" }
 
 [features]
+default = ["bundle-boxroot"]
 link-ocaml-runtime-and-dummy-program = [] # Only for testing purposes
-without-ocamlopt = []
+bundle-boxroot = [] # Builds and links boxroot, otherwise it must be taken care of when linking the final binary
