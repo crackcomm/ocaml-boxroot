@@ -34,6 +34,9 @@
 #include "ocaml_hooks.h"
 #include "platform.h"
 
+#define LIKELY(a) BOXROOT_LIKELY(a)
+#define UNLIKELY(a) BOXROOT_UNLIKELY(a)
+
 /* }}} */
 
 /* {{{ Parameters */

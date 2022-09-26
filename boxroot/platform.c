@@ -31,8 +31,6 @@ void boxroot_free_pool(pool *p) {
     free(p);
 }
 
-#if BOXROOT_USE_MUTEX
-
 int boxroot_initialize_mutex(pthread_mutex_t *mutex)
 {
   return 0 == pthread_mutex_init(mutex, NULL);
@@ -47,11 +45,3 @@ void boxroot_mutex_unlock(pthread_mutex_t *mutex)
 {
   pthread_mutex_unlock(mutex);
 }
-
-#else
-
-int boxroot_initialize_mutex(int *m) { (void)m; return 1; }
-void boxroot_mutex_lock(int *m) { (void)m; }
-void boxroot_mutex_unlock(int *m) { (void)m; }
-
-#endif

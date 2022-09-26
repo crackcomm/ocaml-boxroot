@@ -5,8 +5,7 @@
 #define CAML_NAME_SPACE
 
 #include <caml/mlvalues.h>
-#include <caml/minor_gc.h>
-#include <caml/address_class.h>
+#include "ocaml_hooks.h"
 #include "platform.h"
 
 typedef struct boxroot_private* boxroot;
@@ -74,6 +73,9 @@ void boxroot_print_stats();
 
 typedef struct {
   void *next;
+  /* if non-empty, points to last cell */
+  void *end;
+  /* length of the list */
   int alloc_count;
 #if OCAML_MULTICORE
   atomic_int domain_id;
@@ -82,18 +84,32 @@ typedef struct {
 
 extern boxroot_fl *boxroot_current_fl[Num_domains + 1];
 
-boxroot boxroot_alloc_slot_slow(value);
+void boxroot_create_debug(value v);
+boxroot boxroot_create_slow(value v);
 
-inline boxroot boxroot_alloc_slot(boxroot_fl *fl, value init)
+/* Test the overheads of multithreading (systhreads and multicore).
+   Purely for experimental purposes. Otherwise should always be 1. */
+#define BOXROOT_MULTITHREAD 1
+/* Make every deallocation a remote deallocation. For testing purposes
+   only. Otherwise should always be 0. */
+#define BOXROOT_FORCE_REMOTE 0
+
+inline boxroot boxroot_create(value init)
 {
+#if defined(BOXROOT_DEBUG) && (BOXROOT_DEBUG == 1)
+  boxroot_create_debug(init);
+#endif
+  /* Find current freelist. Synchronized by domain lock. */
+  boxroot_fl *fl = boxroot_current_fl[Domain_id];
+  if (BOXROOT_MULTITHREAD && BOXROOT_UNLIKELY(fl == NULL)) goto slow;
   void *new_root = fl->next;
-  if (UNLIKELY(new_root == fl))
-    // pool full, not allocated or not initialized
-    return boxroot_alloc_slot_slow(init);
+  if (BOXROOT_UNLIKELY(new_root == fl)) goto slow;
   fl->next = *((void **)new_root);
   fl->alloc_count++;
   *((value *)new_root) = init;
   return (boxroot)new_root;
+slow:
+  return boxroot_create_slow(init);
 }
 
 /* Log of the size of the pools (12 = 4KB, an OS page).
@@ -106,44 +122,42 @@ inline boxroot boxroot_alloc_slot(boxroot_fl *fl, value init)
    power of 2. */
 #define DEALLOC_THRESHOLD ((int)POOL_SIZE / 2)
 
-void boxroot_try_demote_pool(boxroot_fl *p);
-
 #define Get_pool_header(s)                                \
   ((void *)((uintptr_t)s & ~((uintptr_t)POOL_SIZE - 1)))
 
-inline void boxroot_free_slot(boxroot_fl *fl, void **s)
-{
-  *s = (void *)fl->next;
-  fl->next = s;
-  int alloc_count = --fl->alloc_count;
-  if (UNLIKELY((alloc_count & (DEALLOC_THRESHOLD - 1)) == 0)) {
-    boxroot_try_demote_pool(fl);
-  }
-}
-
-#if BOXROOT_USE_MUTEX || (defined(BOXROOT_DEBUG) && (BOXROOT_DEBUG == 1))
-#define BOXROOT_NO_INLINE
+#if OCAML_MULTICORE && BOXROOT_MULTITHREAD
+#define dom_id_of_fl(fl) \
+  atomic_load_explicit(&(fl)->domain_id, memory_order_relaxed);
+#else
+#define dom_id_of_fl(fl) ((void)(fl),0)
 #endif
 
-#ifdef BOXROOT_NO_INLINE
-
-boxroot boxroot_create_noinline(value v);
-void boxroot_delete_noinline(boxroot root);
-inline boxroot boxroot_create(value v) { return boxroot_create_noinline(v); }
-inline void boxroot_delete(boxroot root) { boxroot_delete_noinline(root); }
-
-#else
-
-inline boxroot boxroot_create(value v)
+inline int boxroot_free_slot(boxroot_fl *fl, boxroot root)
 {
-  return boxroot_alloc_slot(boxroot_current_fl[Domain_id], v);
+  void **s = (void **)root;
+  void *n = (void *)fl->next;
+  *s = n;
+  if (BOXROOT_MULTITHREAD && BOXROOT_UNLIKELY(n == fl)) fl->end = s;
+  fl->next = s;
+  int alloc_count = --fl->alloc_count;
+  return (alloc_count & (DEALLOC_THRESHOLD - 1)) == 0;
 }
+
+void boxroot_delete_debug(boxroot root);
+void boxroot_delete_slow(boxroot root);
 
 inline void boxroot_delete(boxroot root)
 {
-  boxroot_free_slot(Get_pool_header(root), (void **)root);
+#if defined(BOXROOT_DEBUG) && (BOXROOT_DEBUG == 1)
+  boxroot_delete_debug(root);
+#endif
+  boxroot_fl *fl = Get_pool_header(root);
+  int dom_id = dom_id_of_fl(fl);
+  int remote =
+    BOXROOT_FORCE_REMOTE
+    || (BOXROOT_MULTITHREAD && !boxroot_domain_lock_held(dom_id));
+  if (remote || BOXROOT_UNLIKELY(boxroot_free_slot(fl, root)))
+    boxroot_delete_slow(root);
 }
-
-#endif // BOXROOT_NO_INLINE
 
 #endif // BOXROOT_H

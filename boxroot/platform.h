@@ -5,11 +5,11 @@
 #include <caml/version.h>
 
 #if defined(__GNUC__)
-#define LIKELY(a) __builtin_expect(!!(a),1)
-#define UNLIKELY(a) __builtin_expect(!!(a),0)
+#define BOXROOT_LIKELY(a) __builtin_expect(!!(a),1)
+#define BOXROOT_UNLIKELY(a) __builtin_expect(!!(a),0)
 #else
-#define LIKELY(a) (a)
-#define UNLIKELY(a) (a)
+#define BOXROOT_LIKELY(a) (a)
+#define BOXROOT_UNLIKELY(a) (a)
 #endif
 
 #if OCAML_VERSION >= 50000
@@ -24,22 +24,12 @@
    is checked for consistency. */
 #define Num_domains 128
 #define Domain_id (Caml_state->id)
-#define BOXROOT_USE_MUTEX 1
 
 #else
 
 #define Num_domains 1
 #define Domain_id 0
-
-/* Make it thread-safe using mutexes? Always true for OCaml multicore.
-   This is needed with OCaml 4 if you want to delete a boxroot without
-   holding the domain lock. This can be forced by passing
-   ENABLE_BOXROOT_MUTEX=1 as argument. */
-#if defined(ENABLE_BOXROOT_MUTEX) && (ENABLE_BOXROOT_MUTEX == 1)
-#define BOXROOT_USE_MUTEX 1
-#else
-#define BOXROOT_USE_MUTEX 0
-#endif // ENABLE_BOXROOT_MUTEX
+#define Caml_state_opt Caml_state
 
 #endif // OCAML_MULTICORE
 
@@ -62,26 +52,23 @@ static inline long long incr(stat_t *n)
   return 1 + atomic_fetch_add_explicit(n, 1, memory_order_relaxed);
 }
 
+static inline long long decr(stat_t *n)
+{
+  return atomic_fetch_add_explicit(n, -1, memory_order_relaxed) - 1;
+}
+
 #else
 
 typedef long long stat_t;
 
 static inline long long incr(stat_t *n) { return ++(*n); }
+static inline long long decr(stat_t *n) { return --(*n); }
 
 #endif // OCAML_MULTICORE
-
-#if BOXROOT_USE_MUTEX
 
 #include <pthread.h>
 typedef pthread_mutex_t mutex_t;
 #define BOXROOT_MUTEX_INITIALIZER PTHREAD_MUTEX_INITIALIZER;
-
-#else
-
-typedef int mutex_t;
-#define BOXROOT_MUTEX_INITIALIZER 0;
-
-#endif // BOXROOT_USE_MUTEX
 
 int boxroot_initialize_mutex(mutex_t *mutex);
 void boxroot_mutex_lock(mutex_t *mutex);
