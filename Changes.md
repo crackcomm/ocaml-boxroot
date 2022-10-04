@@ -12,7 +12,7 @@ Working version
   (Guillaume Munch-Maccagnoni, review by Gabriel Scherer)
 
 - Boxroot setup is now automatic and `boxroot_setup` is obsolete.
-  (Guillaume Munch-Maccagnoni)
+  (Guillaume Munch-Maccagnoni, review by Gabriel Scherer)
 
 - Clarify license (MIT license).
   (Guillaume Munch-Maccagnoni, review by Gabriel Scherer)
@@ -47,9 +47,10 @@ Working version
 
 - Remove `without-ocamlopt` feature flag from the Rust crate and add
   `bundle-boxroot`.
-  (Bruno Deferrari)
+  (Bruno Deferrari, review by Guillaume Munch-Maccagnoni)
 
 - Declare `package.links` value in Rust crate.
+  (Bruno Deferrari, review by Guillaume Munch-Maccagnoni)
 
 
 ocaml-boxroot 0.2

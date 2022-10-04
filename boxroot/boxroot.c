@@ -528,7 +528,7 @@ boxroot boxroot_create_slow(value init)
   incr(&stats.total_create_slow);
   if (Caml_state_opt == NULL) return NULL;
   // We might be here because boxroot is not setup.
-  if (status != RUNNING && 0 == setup()) return NULL;
+  if (0 == setup()) return NULL;
 #if !OCAML_MULTICORE
   boxroot_check_thread_hooks();
 #endif
@@ -1120,6 +1120,7 @@ static mutex_t init_mutex = BOXROOT_MUTEX_INITIALIZER;
    requires pool lock: NO */
 static int setup()
 {
+  if (status == RUNNING) return 1;
   boxroot_mutex_lock(&init_mutex);
   if (status == RUNNING) goto out;
   if (status == ERROR) goto out_err;
