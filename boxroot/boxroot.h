@@ -53,20 +53,18 @@ inline void boxroot_delete(boxroot);
 void boxroot_modify(boxroot *, value);
 
 
-/* The behaviour of the above functions is well-defined only after the
-   allocator has been initialised with `boxroot_setup` and before it
-   has released its resources with `boxroot_teardown`.
-
-   [boxroot_setup] must be called after OCaml startup while holding
-   the domain lock, and [boxroot_teardown] can only be called after
-   OCaml shutdown. [boxroot_setup] returns 0 if boxroot has already
-   been setup or tore down, 1 otherwise.
- */
-int boxroot_setup();
+/* `boxroot_teardown()` releases all the resources of Boxroot. None of
+   the function above must be called after this. `boxroot_teardown`
+   can only be called after OCaml shuts down. */
 void boxroot_teardown();
 
 /* Show some statistics on the standard output. */
 void boxroot_print_stats();
+
+
+/* Obsolete, does nothing. */
+
+int boxroot_setup();
 
 
 /* Private implementation */
@@ -101,7 +99,7 @@ inline boxroot boxroot_create(value init)
 #endif
   /* Find current freelist. Synchronized by domain lock. */
   boxroot_fl *fl = boxroot_current_fl[Domain_id];
-  if (BOXROOT_MULTITHREAD && BOXROOT_UNLIKELY(fl == NULL)) goto slow;
+  if (BOXROOT_UNLIKELY(fl == NULL)) goto slow;
   void *new_root = fl->next;
   if (BOXROOT_UNLIKELY(new_root == fl)) goto slow;
   fl->next = *((void **)new_root);

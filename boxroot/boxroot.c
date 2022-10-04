@@ -111,10 +111,8 @@ static boxroot_fl empty_fl =
 #endif
   };
 
-/* Domain 0 can be allocated-to without a mutex with OCaml 4; make
-   sure to have a clean error if boxroot is not setup. TODO: update */
 /* Synchronisation: via domain lock */
-boxroot_fl *boxroot_current_fl[Num_domains + 1] = { &empty_fl /*, NULL... */ };
+boxroot_fl *boxroot_current_fl[Num_domains + 1];
 
 /* requires domain lock: NO
    requires pool lock: NO */
@@ -510,7 +508,7 @@ static void promote_young_pools(int dom_id)
 
 /* {{{ Allocation, deallocation */
 
-enum { NOT_SETUP, RUNNING, FREED };
+enum { NOT_SETUP, RUNNING, ERROR };
 
 /* Thread-safety: see documented constraints on the use of
    boxroot_setup and boxroot_teardown. */
@@ -520,14 +518,17 @@ static atomic_int status = NOT_SETUP;
 static int status = NOT_SETUP;
 #endif
 
+static int setup();
+
 // Set an available pool as current and allocate from it.
 /* requires domain lock: YES
    requires pool lock: NO */
 boxroot boxroot_create_slow(value init)
 {
   incr(&stats.total_create_slow);
+  if (Caml_state_opt == NULL) return NULL;
   // We might be here because boxroot is not setup.
-  if (status != RUNNING) return NULL;
+  if (0 == setup()) return NULL;
 #if !OCAML_MULTICORE
   boxroot_check_thread_hooks();
 #endif
@@ -965,28 +966,6 @@ static double average(long long total, long long units)
   return ((double)total) / (double)units;
 }
 
-static int ring_used(pool *p)
-{
-  return p != NULL && (p->free_list.alloc_count != 0 || p->next != p);
-}
-
-/* TODO: thread-safe; simplify */
-static int boxroot_used()
-{
-  if (ring_used(pools[0]->old)
-      || ring_used(pools[0]->young)
-      || ring_used(pools[0]->current))
-    return 1;
-  for (int i = 1; i < Num_domains; i++) {
-    if (pools[i] != NULL) return 1;
-  }
-  if (ring_used(pools[Orphaned_id]->old)
-      || ring_used(pools[Orphaned_id]->young)
-      || ring_used(pools[Orphaned_id]->current))
-    return 1;
-  return 0;
-}
-
 void boxroot_print_stats()
 {
   printf("minor collections: %'lld\n"
@@ -1111,23 +1090,16 @@ static void scanning_callback(scanning_action action, int only_young,
   int dom_id = Domain_id;
   if (pools[dom_id] == NULL) return; /* synchronised by domain lock */
   acquire_pool_rings(dom_id);
-  // If no boxroot has been allocated, then scan_roots should not have
-  // any noticeable cost. For experimental purposes, since this hook
-  // is also used for other the statistics of other implementations,
-  // we further make sure of this with an extra test, by avoiding
-  // calling scan_roots if it has only just been initialised.
-  if (boxroot_used()) {
 #if !OCAML_MULTICORE
-    boxroot_check_thread_hooks();
+  boxroot_check_thread_hooks();
 #endif
-    long long start = time_counter();
-    scan_roots(action, only_young, data, dom_id);
-    long long duration = time_counter() - start;
-    stat_t *total = in_minor_collection ? &stats.total_minor_time : &stats.total_major_time;
-    stat_t *peak = in_minor_collection ? &stats.peak_minor_time : &stats.peak_major_time;
-    *total += duration;
-    if (duration > *peak) *peak = duration; // racy, but whatever
-  }
+  long long start = time_counter();
+  scan_roots(action, only_young, data, dom_id);
+  long long duration = time_counter() - start;
+  stat_t *total = in_minor_collection ? &stats.total_minor_time : &stats.total_major_time;
+  stat_t *peak = in_minor_collection ? &stats.peak_minor_time : &stats.peak_major_time;
+  *total += duration;
+  if (duration > *peak) *peak = duration; // racy, but whatever
   release_pool_rings(dom_id);
 }
 
@@ -1146,24 +1118,30 @@ static mutex_t init_mutex = BOXROOT_MUTEX_INITIALIZER;
 
 /* requires domain lock: YES
    requires pool lock: NO */
-int boxroot_setup()
+static int setup()
 {
+  if (status == RUNNING) return 1;
   boxroot_mutex_lock(&init_mutex);
-  if (status != NOT_SETUP) {
-    boxroot_mutex_unlock(&init_mutex);
-    return 0;
-  }
-  assert(Caml_state_opt != NULL);
+  if (status == RUNNING) goto out;
+  if (status == ERROR) goto out_err;
   boxroot_setup_hooks(&scanning_callback, &domain_termination_callback);
   /* Domain 0 can be accessed without going through acquire_pool_rings
      on OCaml 4 without mutex, so we need to initialize it right away. */
-  init_pool_rings(0);
-  init_pool_rings(Orphaned_id);
+  if (NULL == init_pool_rings(Orphaned_id)) goto out_err;
   // we are done
   status = RUNNING;
+  // fall through
+ out:
   boxroot_mutex_unlock(&init_mutex);
   return 1;
+ out_err:
+  status = ERROR;
+  boxroot_mutex_unlock(&init_mutex);
+  return 0;
 }
+
+/* obsolete */
+int boxroot_setup() { return 1; }
 
 /* requires domain lock: NO
    requires pool lock: NO
@@ -1174,8 +1152,8 @@ void boxroot_teardown()
 {
   boxroot_mutex_lock(&init_mutex);
   if (status != RUNNING) goto out;
-  status = FREED;
-  for (int i = 0; i < Num_domains; i++) {
+  status = ERROR;
+  for (int i = 0; i < Num_domains + 1; i++) {
     pool_rings *ps = pools[i];
     if (ps == NULL) continue;
     free_pool_rings(ps);
