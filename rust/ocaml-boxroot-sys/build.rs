@@ -1,5 +1,25 @@
 /* SPDX-License-Identifier: MIT */
 
+fn exec_cmd(cmd: &str, args: &[&str]) -> Option<String> {
+    Some(
+        std::str::from_utf8(
+            std::process::Command::new(cmd)
+                .args(args)
+                .output()
+                .ok()?
+                .stdout
+                .as_ref(),
+        )
+        .ok()?
+        .trim()
+        .to_owned(),
+    )
+}
+
+fn exec_cmd_not_empty(cmd: &str, args: &[&str]) -> Option<String> {
+    exec_cmd(cmd, args).filter(|ref s| !s.is_empty())
+}
+
 #[cfg(feature = "bundle-boxroot")]
 fn build_boxroot() {
     println!("cargo:rerun-if-changed=vendor/boxroot/boxroot.c");
@@ -10,23 +30,34 @@ fn build_boxroot() {
     println!("cargo:rerun-if-env-changed=OCAML_WHERE_PATH");
 
     let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let ocaml_version = std::env::var("OCAML_VERSION");
     let ocaml_where_path = std::env::var("OCAML_WHERE_PATH");
-    let ocamlopt = std::env::var("OCAMLOPT").unwrap_or_else(|_| "ocamlopt".to_string());
 
-    let ocaml_path = match ocaml_where_path {
-        Ok(path) => path,
-        _ => std::str::from_utf8(
-            std::process::Command::new(&ocamlopt)
-                .arg("-where")
-                .output()
-                .unwrap()
-                .stdout
-                .as_ref(),
-        )
-        .unwrap()
-        .trim()
-        .to_owned(),
+    let version: String;
+    let ocaml_path: String;
+    let ocamlopt = if let Ok(ocamlopt) = std::env::var("OCAMLOPT") {
+        Some(ocamlopt)
+    } else {
+        exec_cmd_not_empty("which", &["ocamlopt"])
     };
+
+    let ocamlopt = if let Some(ocamlopt) = ocamlopt {
+        ocamlopt
+    } else {
+        let esy = exec_cmd_not_empty("which", &["esy"]).expect("which esy");
+        exec_cmd_not_empty(&esy, &["which", "ocamlopt"]).expect("esy which ocamlopt")
+    };
+
+    match (ocaml_version, ocaml_where_path) {
+        (Ok(ver), Ok(path)) => {
+            version = ver;
+            ocaml_path = path;
+        }
+        _ => {
+            version = exec_cmd_not_empty(&ocamlopt, &["-version"]).expect("ocamlopt -version");
+            ocaml_path = exec_cmd_not_empty(&ocamlopt, &["-where"]).expect("ocamlopt -where");
+        }
+    }
 
     let mut config = cc::Build::new();
 
@@ -82,7 +113,10 @@ fn link_runtime(
     .unwrap()
     .to_owned()
     .split_whitespace()
-    .map(|s| { assert!(&s[0..2] == "-l"); String::from(&s[2..]) })
+    .map(|s| {
+        assert!(&s[0..2] == "-l");
+        String::from(&s[2..])
+    })
     .collect();
 
     for lib in cc_libs {
